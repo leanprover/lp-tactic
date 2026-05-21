@@ -1,5 +1,6 @@
 import LPTactic.Dispatch
 import LPTactic.LP.Atomic
+import LPTactic.LP.BackendOption
 import LPTactic.LP.Forall
 
 open Lean Meta Elab Tactic
@@ -159,7 +160,7 @@ def tryHypsInconsistent (rows : Array Row) (vars : Array FVarId) :
     | .error _ => return none
     | .ok p => pure p
   let sol ←
-    match ← Soplex.LP.dispatchSolveExact opts normalized with
+    match ← Soplex.LP.dispatchSolveExact opts normalized (← getBackendOverride) with
     | .error _ => return none
     | .ok sol => pure sol
   match sol.status with

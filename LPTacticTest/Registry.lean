@@ -154,6 +154,35 @@ def case_resolveMissingName : IO Unit := withBackendRegistrySnapshot do
     assertM ((msg.splitOn "y").length > 1) "case 8: missing 'y' in diag"
   | _ => throw (IO.userError "case 8: expected error")
 
+/-- Case 10: explicit per-call backend name reaches that backend
+    even when its probe would fail (the override skips the probe
+    check). -/
+def case_explicitNameSkipsProbe : IO Unit := withBackendRegistrySnapshot do
+  let m ← backendRegistry.get
+  for (name, _) in m.toList do unregisterBackend name
+  registerBackend (mkDummy "down" 10 (pure (.error "intentional disable")))
+  let r ← dispatchSolveExact (m := 0) (n := 0) {} dummyProblem (some "down")
+  match r with
+  | .error (.bridge msg) =>
+    assertM (msg.startsWith "dummy backend 'down'")
+      s!"case 10: expected explicit 'down' backend, got: {msg}"
+  | _ => throw (IO.userError "case 10: expected dummy bridge error")
+
+/-- Case 11: explicit per-call name to an unregistered backend
+    returns a structured error citing the registered names. -/
+def case_explicitNameUnregistered : IO Unit := withBackendRegistrySnapshot do
+  let m ← backendRegistry.get
+  for (name, _) in m.toList do unregisterBackend name
+  registerBackend (mkDummy "ffi" 10 (pure (.ok ())))
+  let r ← dispatchSolveExact (m := 0) (n := 0) {} dummyProblem (some "ghost")
+  match r with
+  | .error (.bridge msg) =>
+    assertM ((msg.splitOn "ghost").length > 1)
+      s!"case 11: expected 'ghost' in diag, got: {msg}"
+    assertM ((msg.splitOn "ffi").length > 1)
+      s!"case 11: expected 'ffi' in registered list, got: {msg}"
+  | _ => throw (IO.userError "case 11: expected explicit-name bridge error")
+
 /-- Case 9: re-registering the same name raises. -/
 def case_duplicateRegisterRejected : IO Unit := withBackendRegistrySnapshot do
   registerBackend (mkDummy "x" 50 (pure (.ok ())))
@@ -180,6 +209,8 @@ def main : IO UInt32 := do
       ("allProbesFail",             case_allProbesFail),
       ("resolveHappyPath",          case_resolveHappyPath),
       ("resolveMissingName",        case_resolveMissingName),
+      ("explicitNameSkipsProbe",    case_explicitNameSkipsProbe),
+      ("explicitNameUnregistered",  case_explicitNameUnregistered),
       ("duplicateRegisterRejected", case_duplicateRegisterRejected) ]
   let mut failures := 0
   for (name, action) in cases do

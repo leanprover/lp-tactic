@@ -1,5 +1,6 @@
 import LPTactic.Dispatch
 import LPTactic.LP.Atomic
+import LPTactic.LP.BackendOption
 import LPTactic.LP.Exists
 
 open Lean Meta Elab Tactic
@@ -102,7 +103,7 @@ def runMaximize (g : MVarId) (hname : Name) (exprE : Expr) :
     | .error e => throwError "maximize: invalid generated problem: {repr e}"
     | .ok p => pure p
   let sol ←
-    match ← Soplex.LP.dispatchSolveExact opts normalized with
+    match ← Soplex.LP.dispatchSolveExact opts normalized (← getBackendOverride) with
     | .error e => throwError "maximize: solveExact failed: {repr e}"
     | .ok sol => pure sol
   match sol.status with

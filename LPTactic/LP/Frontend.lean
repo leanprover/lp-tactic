@@ -1,4 +1,5 @@
 import LPTactic.LP.Atomic
+import LPTactic.LP.BackendOption
 import LPTactic.LP.Exists
 
 open Lean Meta Elab Tactic
@@ -23,14 +24,30 @@ partial def solveGoal (g : MVarId) : TacticM Unit := do
     else
       solveAtomic g
 
-elab "lp" : tactic => do
-  let goals ← getGoals
-  match goals with
-  | [] => throwError "lp: no goals"
-  | g :: rest =>
-      setGoals [g]
-      solveGoal g
-      let newGoals ← getGoals
-      setGoals (newGoals ++ rest)
+/-- The `lp` tactic. Optional `(backend := <name>)` argument pins a
+    specific backend by name for this call only, overriding any
+    ambient `set_option lp.backend` and the registry's
+    priority-based default. -/
+syntax (name := lpTactic) "lp" (" (" &"backend" " := " ident ")")? : tactic
+
+elab_rules : tactic
+  | `(tactic| lp $[(backend := $b:ident)]?) => do
+    let backendOverride? : Option String := b.map (·.getId.toString)
+    let withBackend (act : TacticM Unit) : TacticM Unit :=
+      match backendOverride? with
+      | some name =>
+        withTheReader Core.Context (fun ctx =>
+          { ctx with options :=
+              Soplex.Tactic.LP.lp.backend.set ctx.options name }) act
+      | none => act
+    withBackend do
+      let goals ← getGoals
+      match goals with
+      | [] => throwError "lp: no goals"
+      | g :: rest =>
+          setGoals [g]
+          solveGoal g
+          let newGoals ← getGoals
+          setGoals (newGoals ++ rest)
 
 end Soplex.Tactic.LP.Internal
