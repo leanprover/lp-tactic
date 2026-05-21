@@ -1,0 +1,64 @@
+# LPTactic
+
+[![Lean](https://img.shields.io/badge/Lean-4.29.1-blue.svg)](./lean-toolchain)
+[![License](https://img.shields.io/github/license/kim-em/lp-tactic.svg)](./LICENSE)
+
+The `by lp` and `maximize` tactics — Π₂ linear-rational-arithmetic
+goals reduced to LP solves, with the dual multipliers reconstructed
+into kernel-checked Lean proof terms — plus the `LPBackend` registry
+and the verified-solve drivers
+(`solveVerified` / `solveVerifiedWith`) factored out of
+[`kim-em/soplex`](https://github.com/kim-em/soplex).
+
+This package carries no `moreLinkArgs`, but does (today) depend on
+[`kim-em/soplex-ffi`](https://github.com/kim-em/soplex-ffi) because
+the tactic calls `Soplex.solveExact` directly. The follow-up issue
+#50 step 3 threads `LPBackend` through every call site, at which
+point the FFI dependency drops and `lp-tactic` becomes truly
+backend-agnostic.
+
+For the `lp` and `maximize` tactic surface, depend on the meta-package
+[`kim-em/soplex`](https://github.com/kim-em/soplex); that's still the
+front door (`import Soplex` is unchanged).
+
+## Quickstart
+
+```lean
+require LPTactic from git "https://github.com/kim-em/lp-tactic" @ "main"
+```
+
+```lean
+import LPTactic
+
+example (a b : Rat) (_ : 2 * a + b ≤ 5) (_ : a - b ≤ 1) :
+    3 * a ≤ 6 := by lp
+```
+
+## Layout
+
+```
+LPTactic.lean              # top-level import
+LPTactic/Basic.lean        # solveVerified, solveVerifiedWith, defaultDenomBudget
+LPTactic/Registry.lean     # registerBackend, resolveBackend, availableBackends
+LPTactic/Q.lean            # kernel-reducible rational literals
+LPTactic/LP.lean           # `lp` and `maximize` tactic frontend
+LPTactic/LP/Types.lean     # tactic state + telemetry
+LPTactic/LP/Parse.lean     # goal parsing
+LPTactic/LP/Problem.lean   # tactic-side Problem construction
+LPTactic/LP/Atomic.lean    # direct-certificate path
+LPTactic/LP/Exists.lean    # existential-witness LP path
+LPTactic/LP/Forall.lean    # inner-∀ + Benders subproblem paths
+LPTactic/LP/Maximize.lean  # `maximize` tactic body
+LPTactic/LP/Certificate.lean
+                           # certificate → kernel proof-term reconstruction
+LPTactic/LP/Frontend.lean  # syntax elaboration entry point
+```
+
+Declarations remain under `namespace Soplex` (or `Soplex.LP`,
+`Soplex.Tactic.LP`) so consumers writing `Soplex.solveVerified` or
+`by lp` resolve to the same definitions regardless of which package
+owns them.
+
+## Licence
+
+[Apache License 2.0](./LICENSE).
