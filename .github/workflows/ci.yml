@@ -6,6 +6,7 @@ on:
     branches: [main]
 jobs:
   build:
+    name: Build + test (no native deps)
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -18,11 +19,9 @@ jobs:
           curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
             | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-      - name: System deps (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake libgmp-dev libgmpxx4ldbl libboost-dev
-      - name: System deps (macOS)
-        if: runner.os == 'macOS'
-        run: brew install gmp boost cmake || true
+      # No native deps installed deliberately. `lp-tactic` is pure
+      # Lean; if anything in this build graph ever pulls GMP, Boost,
+      # or SoPlex, we want to know immediately.
       - run: lean --version
       - run: lake build
+      - run: lake test

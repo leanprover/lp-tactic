@@ -28,3 +28,16 @@ lean_lib LPTactic where
   roots := #[`LPTactic]
   globs := #[`LPTactic, `LPTactic.Basic, `LPTactic.Registry, `LPTactic.LP,
              `LPTactic.LP.+, `LPTactic.Q]
+
+/-- Behavioral tests for the registry. Build via
+    `lake build LPTacticTest` or run via `lake test`. -/
+lean_lib LPTacticTest where
+  roots := #[`LPTacticTest.Registry, `LPTacticTest.Runner]
+
+lean_exe «registry-tests» where
+  root := `LPTacticTest.Registry
+
+/-- `lake test` entry point. Runs every test exe. -/
+@[test_driver]
+lean_exe «test-runner» where
+  root := `LPTacticTest.Runner

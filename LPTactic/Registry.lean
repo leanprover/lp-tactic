@@ -28,14 +28,44 @@ initialize backendRegistry : IO.Ref (HashMap String LPBackend) ←
   IO.mkRef ∅
 
 /-- Register a backend under its `name`. Raises if a backend with the
-    same name is already registered: users override priority via
-    `set_option lp.backend` or per-call argument, never by silently
-    swapping in a different descriptor. -/
+    same name is already registered.
+
+    Atomic via `IO.Ref.modifyGet`: concurrent register calls cannot
+    lose updates. -/
 def registerBackend (b : LPBackend) : IO Unit := do
-  let m ← backendRegistry.get
-  if m.contains b.name then
+  let alreadyExists ← backendRegistry.modifyGet fun m =>
+    if m.contains b.name then
+      (true, m)
+    else
+      (false, m.insert b.name b)
+  if alreadyExists then
     throw <| IO.userError s!"lp: backend '{b.name}' is already registered"
-  backendRegistry.set (m.insert b.name b)
+
+/-- Remove a backend by name. No-op if no backend is registered under
+    that name.
+
+    Primarily intended for tests that need to roll back state between
+    cases. Use `withBackendRegistrySnapshot` when possible — it
+    handles the snapshot / restore pair safely under exceptions. -/
+def unregisterBackend (name : String) : IO Unit :=
+  backendRegistry.modify (fun m => m.erase name)
+
+/-- Snapshot the current registry, run `action`, then restore the
+    snapshot regardless of whether `action` succeeded or threw.
+
+    This is the supported test-isolation primitive: a test can
+    `registerBackend` dummy backends inside the action and trust that
+    the global state will be back to what it was when the action
+    returns. -/
+def withBackendRegistrySnapshot {α : Type} (action : IO α) : IO α := do
+  let snapshot ← backendRegistry.get
+  try
+    let result ← action
+    backendRegistry.set snapshot
+    pure result
+  catch e =>
+    backendRegistry.set snapshot
+    throw e
 
 /-- Look up a backend by name. -/
 def resolveBackend (name : String) : IO (Except String LPBackend) := do
@@ -49,7 +79,7 @@ def resolveBackend (name : String) : IO (Except String LPBackend) := do
 /-- Run a backend's probe, converting any unhandled `IO` exception into
     a probe failure. A misbehaving backend cannot abort the fallback
     search; it can only fail its own probe. -/
-private def safeProbe (b : LPBackend) : IO (Except String Unit) := do
+def safeProbe (b : LPBackend) : IO (Except String Unit) := do
   try
     b.probe
   catch e =>
