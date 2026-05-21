@@ -4,14 +4,15 @@ open Lake DSL
 /-! # `LPTactic` build configuration
 
   The `by lp` and `maximize` tactics, plus the `LPBackend` registry
-  (`registerBackend`, `resolveBackend`, `availableBackends`) and the
-  verified-solve drivers (`solveVerified`, `solveVerifiedWith`).
+  (`registerBackend`, `resolveBackend`, `availableBackends`), the
+  default-backend dispatcher (`Soplex.LP.dispatchSolveExact`), and
+  the backend-pluggable verified-solve driver (`solveVerifiedWith`).
 
-  No `moreLinkArgs`. The package depends on `kim-em/soplex-ffi`
-  transitively for `Soplex.solveExact`, which the tactic still calls
-  directly today; threading `LPBackend` through every call site
-  (issue #50 step 3) is what removes the FFI dependency edge so a
-  truly verifier-only-without-SoPlex consumer becomes possible.
+  **No FFI dependency.** All solver calls go through `LPBackend`
+  values fetched from the registry. A consumer who wants to verify
+  externally-produced certificates without ever building SoPlex
+  depends on this package directly (plus `lp-verify`), with no
+  native deps in the dependency graph.
 -/
 
 require LPCore from git "https://github.com/kim-em/lp-core" @
@@ -19,9 +20,6 @@ require LPCore from git "https://github.com/kim-em/lp-core" @
 
 require LPVerify from git "https://github.com/kim-em/lp-verify" @
   "3726846a10bb875d133a52a2c4b137da2806e22e"
-
-require SoplexFFI from git "https://github.com/kim-em/soplex-ffi" @
-  "a1389a99c2345f9d72ffdc2941be350ad0f97fd7"
 
 package LPTactic
 
