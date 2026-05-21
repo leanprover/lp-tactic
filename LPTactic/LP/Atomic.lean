@@ -1,3 +1,4 @@
+import LPTactic.Dispatch
 import LPTactic.LP.Certificate
 
 open Lean Meta Elab Tactic
@@ -98,7 +99,7 @@ def proveEntailed (rows : Array Row) (strict : Bool)
     | .error e => throwError "lp: invalid generated problem: {repr e}"
     | .ok p => pure p
   let sol ←
-    match solveExact opts normalized with
+    match ← Soplex.LP.dispatchSolveExact opts normalized with
     | .error e => throwError "lp: solveExact failed: {repr e}"
     | .ok sol => pure sol
   -- Handle the unbounded case up front: there is no dual to consume.

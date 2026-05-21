@@ -1,3 +1,4 @@
+import LPTactic.Dispatch
 import LPTactic.LP.Atomic
 import LPTactic.LP.Forall
 
@@ -158,7 +159,7 @@ def tryHypsInconsistent (rows : Array Row) (vars : Array FVarId) :
     | .error _ => return none
     | .ok p => pure p
   let sol ←
-    match solveExact opts normalized with
+    match ← Soplex.LP.dispatchSolveExact opts normalized with
     | .error _ => return none
     | .ok sol => pure sol
   match sol.status with

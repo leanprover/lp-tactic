@@ -1,3 +1,4 @@
+import LPTactic.Dispatch
 import LPTactic.LP.Certificate
 
 open Lean Meta Elab Tactic
@@ -29,7 +30,7 @@ def solveWitnessLP (lpRows : Array LinExpr) (binders : Array FVarId) :
     | .error e => return .error (some s!"invalid generated problem: {repr e}")
     | .ok p => pure p
   let sol ←
-    match solveExact opts normalized with
+    match ← Soplex.LP.dispatchSolveExact opts normalized with
     | .error e => return .error (some s!"solveExact failed: {repr e}")
     | .ok sol => pure sol
   match sol.status with
@@ -126,7 +127,7 @@ def runSupLP (yBinders : Array FVarId) (guardsLe : Array LinExpr)
     | .error e => throwError "lp(∀): invalid sup-LP: {repr e}"
     | .ok p => pure p
   let sol ←
-    match solveExact opts normalized with
+    match ← Soplex.LP.dispatchSolveExact opts normalized with
     | .error e => throwError "lp(∀): solveExact failed on sup-LP: {repr e}"
     | .ok sol => pure sol
   match sol.status with
@@ -367,7 +368,7 @@ def runBendersSubproblem (u : BendersUniversal)
     | .error e => return .uncheckedFail s!"invalid Benders subproblem LP: {repr e}"
     | .ok p => pure p
   let sol ←
-    match solveExact opts normalized with
+    match ← Soplex.LP.dispatchSolveExact opts normalized with
     | .error e => return .uncheckedFail s!"solveExact failed on Benders subproblem: {repr e}"
     | .ok sol => pure sol
   match sol.status with

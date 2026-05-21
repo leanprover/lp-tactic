@@ -1,3 +1,4 @@
+import LPTactic.Dispatch
 import LPTactic.LP.Atomic
 import LPTactic.LP.Exists
 
@@ -101,7 +102,7 @@ def runMaximize (g : MVarId) (hname : Name) (exprE : Expr) :
     | .error e => throwError "maximize: invalid generated problem: {repr e}"
     | .ok p => pure p
   let sol ←
-    match solveExact opts normalized with
+    match ← Soplex.LP.dispatchSolveExact opts normalized with
     | .error e => throwError "maximize: solveExact failed: {repr e}"
     | .ok sol => pure sol
   match sol.status with
