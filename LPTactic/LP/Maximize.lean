@@ -46,18 +46,20 @@ def runMaximize (g : MVarId) (hname : Name) (exprE : Expr) :
   -- gives a cleaner diagnostic than letting `parseExpr` discover the
   -- mismatch deep inside the affine grammar walker.
   let exprE ← instantiateMVars exprE
-  let exprTy ← inferType exprE
-  unless ← isDefEq exprTy ratType do
-    throwError "maximize: expected a `Rat` expression, got{indentExpr exprE}{
-      ""}\n  of type{indentExpr exprTy}"
-  -- Parse `expr` (registers its `Rat` locals as LP variables) and then
+  let carrier ← inferType exprE
+  unless ← isCarrierType carrier do
+    throwError "maximize: expected a supported-carrier expression, got{indentExpr exprE}{
+      ""}\n  of type{indentExpr carrier}"
+  -- Carrier frontend context (bound numerals + the inconsistency probe).
+  let fctx ← mkFrontendCtx carrier
+  -- Parse `expr` (registers its carrier locals as LP variables) and then
   -- collect the non-strict linear hypotheses from the local context.
   -- Order matters only for the LP column ordering: `expr`'s vars come
   -- first, matching what `solveAtomic` does for goal-then-hyps.
   let ((exprLin, rows), state) ← (do
       let exprLin ← parseExpr exprE
       let hs ← collectHyps
-      pure (exprLin, hs)).run {}
+      pure (exprLin, hs)).run { carrier }
   let vars := state.vars
   -- Build the sup LP: `max exprLin subject to (each row.expr ≤ 0)`.
   -- A variable appearing in `exprLin` but in no hypothesis row has a
@@ -73,10 +75,8 @@ def runMaximize (g : MVarId) (hname : Name) (exprE : Expr) :
   -- and stay open. The closed-rows-only branch of `tryHypsInconsistent`
   -- handles the probe without SoPlex.
   if vars.size = 0 then
-    match ← tryHypsInconsistent rows vars with
-    | some hFalse =>
-        let goalType ← g.getType
-        let proofTerm ← mkAppOptM ``False.elim #[some goalType, some hFalse]
+    match ← tryHypsInconsistent fctx rows vars (← g.getType) with
+    | some proofTerm =>
         g.assign proofTerm
         return
     | none => pure ()
@@ -84,7 +84,7 @@ def runMaximize (g : MVarId) (hname : Name) (exprE : Expr) :
     -- `c ≤ 0`); the bound `expr ≤ N` follows from `Rat.le_refl` via
     -- `proveEntailed`'s empty-multiplier branch.
     let N := exprLin.const
-    let NE ← mkRatLit N
+    let NE ← fctx.mkNumeral N
     let proof ← proveEntailed rows false vars exprE NE
     let propType ← mkAppM ``LE.le #[exprE, NE]
     let g' ← g.assert hname propType proof
@@ -122,7 +122,7 @@ def runMaximize (g : MVarId) (hname : Name) (exprE : Expr) :
       -- offset, so a `maximize 3 * x + 7` optimum is the full
       -- `3 * x* + 7`, not just `3 * x*`.
       let N : Rat := exprLin.evalAt vars pr.toArray
-      let NE ← mkRatLit N
+      let NE ← fctx.mkNumeral N
       -- Build `proof : exprE ≤ NE` by reusing the atomic-goal
       -- entailment discharger. This re-solves an LP internally — a small redundant
       -- cost in exchange for sharing the entire closing-lemma and
@@ -140,10 +140,8 @@ def runMaximize (g : MVarId) (hname : Name) (exprE : Expr) :
       -- probe to extract a `False` proof from the dual, then close the
       -- surrounding goal (any proposition) by `False.elim`. This is the
       -- only branch where `maximize` touches the goal.
-      match ← tryHypsInconsistent rows vars with
-      | some hFalse =>
-          let goalType ← g.getType
-          let proofTerm ← mkAppOptM ``False.elim #[some goalType, some hFalse]
+      match ← tryHypsInconsistent fctx rows vars (← g.getType) with
+      | some proofTerm =>
           g.assign proofTerm
       | none =>
           throwError "maximize: SoPlex reported infeasible but no `False` {
@@ -175,7 +173,9 @@ elab_rules : tactic
             let hname : Name := match h with
               | some id => id.getId
               | none    => `hbound
-            let exprE ← Elab.Tactic.elabTermEnsuringType e ratType
+            -- Elaborate freely so the carrier follows the expression's type
+            -- (`Rat`, `ℝ`, …); `runMaximize` validates it is an ordered field.
+            let exprE ← Elab.Tactic.elabTerm e none
             runMaximize g hname exprE
           let newGoals ← getGoals
           setGoals (newGoals ++ rest)

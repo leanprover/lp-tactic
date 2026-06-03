@@ -80,7 +80,7 @@ def isForallRat? (e : Expr) : MetaM Bool := do
   match ← whnf e with
   | .forallE _ ty body _ =>
       let tyW ← whnf ty
-      return tyW.isConstOf ``Rat && body.hasLooseBVars
+      return (← isCarrierType tyW) && body.hasLooseBVars
   | _ => return false
 
 /-- Outcome of the sup-LP for one body direction of an x-independent
@@ -151,9 +151,9 @@ xBinder occurrence; the caller decides whether x-dependence is acceptable
 (the x-independent path rejects it; the Benders path accepts and routes
 to constraint generation). Strict guards and unparseable shapes are
 still rejected at this layer. -/
-def parseGuardLinExprs (xBinders yBinders : Array FVarId) (g : Expr) :
+def parseGuardLinExprs (xBinders yBinders : Array FVarId) (carrier : Expr) (g : Expr) :
     MetaM (Array LinExpr) := do
-  let parsed ← (parseAtomic? g).run' { vars := xBinders ++ yBinders }
+  let parsed ← (parseAtomic? g).run' { vars := xBinders ++ yBinders, carrier }
   match parsed with
   | none =>
       throwError "lp(∀): universal guard must be a non-strict atomic Rat {
@@ -174,9 +174,9 @@ parameter promotion, not currently supported).
 Entry point for the x-independent guard path; the Benders path uses
 `parseGuardLinExprs` directly and routes x-dependent guards to
 constraint generation. -/
-def parseUniversalGuard (xBinders yBinders : Array FVarId) (g : Expr) :
+def parseUniversalGuard (xBinders yBinders : Array FVarId) (carrier : Expr) (g : Expr) :
     MetaM (Array LinExpr) := do
-  let dirs ← parseGuardLinExprs xBinders yBinders g
+  let dirs ← parseGuardLinExprs xBinders yBinders carrier g
   for L in dirs do
     for (v, _) in L.coeffs do
       if xBinders.any (· == v) then
@@ -198,7 +198,7 @@ contributes zero rows.
 The fvars introduced by `forallTelescope` are local to this call; the
 returned `LinExpr`s only mention `xBinders`, which remain valid in the
 caller's scope. -/
-def parseAndSolveUniversal (xBinders : Array FVarId) (forallExpr : Expr) :
+def parseAndSolveUniversal (xBinders : Array FVarId) (carrier : Expr) (forallExpr : Expr) :
     MetaM (Array LinExpr) := do
   let forallExpr ← whnf forallExpr
   Meta.forallTelescopeReducing forallExpr fun args bodyAtom => do
@@ -212,7 +212,7 @@ def parseAndSolveUniversal (xBinders : Array FVarId) (forallExpr : Expr) :
       let argId := arg.fvarId!
       let decl ← argId.getDecl
       let ty ← whnf decl.type
-      if ty.isConstOf ``Rat then
+      if ← isDefEq ty carrier then
         if seenGuard then
           throwError "lp(∀): universal `Rat` binders must precede guards in {
             ""}`∀ y₁ … yₘ : Rat, G → … → atomic` shape{indentExpr forallExpr}"
@@ -227,10 +227,10 @@ def parseAndSolveUniversal (xBinders : Array FVarId) (forallExpr : Expr) :
     let mut guardsLe : Array LinExpr := #[]
     for hExpr in guardExprs do
       let gType ← inferType hExpr
-      let dirs ← parseUniversalGuard xBinders yBinders gType
+      let dirs ← parseUniversalGuard xBinders yBinders carrier gType
       guardsLe := guardsLe ++ dirs
     -- Parse atomic body.
-    let parsedBody ← (parseAtomic? bodyAtom).run' { vars := xBinders ++ yBinders }
+    let parsedBody ← (parseAtomic? bodyAtom).run' { vars := xBinders ++ yBinders, carrier }
     let some (rel, _, _, lhsLin, rhsLin) := parsedBody
       | throwError "lp(∀): universal body must be a non-strict atomic Rat {
           ""}(in)equality{indentExpr bodyAtom}"
@@ -596,7 +596,7 @@ inductive UniversalDispatch
 either the x-independent path or the Benders path. The numeric-witness
 restriction is enforced here (before any Benders work): outer Rat
 parameters in either the body or any guard cause a precise rejection. -/
-def classifyUniversal (xBinders : Array FVarId) (forallExpr : Expr) :
+def classifyUniversal (xBinders : Array FVarId) (carrier : Expr) (forallExpr : Expr) :
     MetaM UniversalDispatch := do
   let forallExpr ← whnf forallExpr
   Meta.forallTelescopeReducing forallExpr fun args bodyAtom => do
@@ -608,7 +608,7 @@ def classifyUniversal (xBinders : Array FVarId) (forallExpr : Expr) :
       let argId := arg.fvarId!
       let decl ← argId.getDecl
       let ty ← whnf decl.type
-      if ty.isConstOf ``Rat then
+      if ← isDefEq ty carrier then
         if seenGuard then
           throwError "lp(∀): universal `Rat` binders must precede guards{
             indentExpr forallExpr}"
@@ -623,7 +623,7 @@ def classifyUniversal (xBinders : Array FVarId) (forallExpr : Expr) :
     let mut allGuardDirs : Array LinExpr := #[]
     for hExpr in guardExprs do
       let gType ← inferType hExpr
-      let dirs ← parseGuardLinExprs xBinders yBinders gType
+      let dirs ← parseGuardLinExprs xBinders yBinders carrier gType
       allGuardDirs := allGuardDirs ++ dirs
     -- Validate guard scope: each coefficient must be in `xBinders ∪ yBinders`.
     -- Outer Rat parameters in any guard are rejected (numeric-witness restriction).
@@ -639,7 +639,7 @@ def classifyUniversal (xBinders : Array FVarId) (forallExpr : Expr) :
       for (v, _) in L.coeffs do
         if xBinders.any (· == v) then anyXInGuard := true
     -- Parse body atomic.
-    let parsedBody ← (parseAtomic? bodyAtom).run' { vars := xBinders ++ yBinders }
+    let parsedBody ← (parseAtomic? bodyAtom).run' { vars := xBinders ++ yBinders, carrier }
     let some (rel, _, _, lhsLin, rhsLin) := parsedBody
       | throwError "lp(∀): universal body must be a non-strict atomic Rat {
           ""}(in)equality{indentExpr bodyAtom}"

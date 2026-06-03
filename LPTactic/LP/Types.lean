@@ -256,17 +256,29 @@ structure LinExpr where
   deriving Inhabited
 
 structure Row where
+  /-- `lhsᵢ - rhsᵢ` (ring carriers; uses subtraction — never forced on the `Nat` path). -/
   term : MetaM Expr
   expr : LinExpr
+  /-- proof of `term ≤ 0` (ring carriers). -/
   proof : MetaM Expr
+  /-- the original `lhsᵢ`/`rhsᵢ` exprs and `leProof : lhsᵢ ≤ rhsᵢ` — the no-subtraction form
+  the `Nat` carrier uses (a weighted `Σkᵢ·lhsᵢ ≤ Σkᵢ·rhsᵢ`). Lazy `default`s so ring carriers
+  pay nothing. -/
+  lhsExpr : Expr := default
+  rhsExpr : Expr := default
+  leProof : MetaM Expr := throwError "lp: row has no ≤-proof (non-Nat carrier)"
+
+def ratType : Expr := mkConst ``Rat
 
 structure ParseState where
   vars : Array FVarId := #[]
+  /-- The carrier type `α` of the goal being parsed. Atoms and scalars are
+  checked against this; hypotheses over a different type are skipped. Defaults
+  to `Rat` so existing `Rat`-only entry points need no change. -/
+  carrier : Expr := ratType
   deriving Inhabited
 
 abbrev ParseM := StateT ParseState MetaM
-
-def ratType : Expr := mkConst ``Rat
 
 def addVar (fvarId : FVarId) : ParseM Unit := do
   let s ← get
