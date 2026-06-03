@@ -242,9 +242,9 @@ partial def parseExpr (e : Expr) : ParseM LinExpr := do
               return (← parseExpr lhs).smul c
             throwError "lp: nonlinear multiplication; one side of `*` must be a reducibly-closed scalar"
       | .const ``HDiv.hDiv _ =>
-          -- `Int`/`Nat` division is rejected by `parseScalar?`; this is a field
-          -- carrier dividing by a non-constant (nonlinear).
-          throwError "lp: division by a non-constant is outside the supported affine grammar"
+          -- `Int`/`Nat` division is rejected by `parseScalar?` above; reaching here
+          -- means a field carrier with a non-closed-scalar `/` (e.g. `x / 2`, `2 / x`).
+          throwError "lp: division is outside the supported affine grammar"
       | _ => pure ()
       throwError "lp: unsupported {(← get).carrier} expression{indentExpr e}"
 
