@@ -1,4 +1,7 @@
 import LPTactic.LP.Types
+import LPTactic.LP.FieldGeneric
+import LPTactic.LP.IntGeneric
+import LPTactic.LP.DyadicGeneric
 
 open Lean Meta Elab Tactic
 open Soplex Soplex.Verify
@@ -110,6 +113,9 @@ partial def parseScalar? (e : Expr) : MetaM (Option Rat) := do
       match ← fvarLetValue? id with
       | some value => parseScalar? value
       | none => return none
+  | .lit (.natVal n) =>
+      -- Raw `Nat` literal (e.g. `mkNatNum`'s output, or a `Nat`-carrier numeral).
+      return some (n : Rat)
   | _ =>
       let fn := e.getAppFn
       let args := e.getAppArgs
@@ -119,6 +125,21 @@ partial def parseScalar? (e : Expr) : MetaM (Option Rat) := do
             match args[1]! with
             | .lit (.natVal n) => return some (OfNat.ofNat n)
             | _ => return none
+      -- Native computable-carrier literal forms (the `mkIntNum`/`mkDyadicNum`
+      -- frontend-numeral and certificate-leaf renderings), so spliced witnesses
+      -- and recomputed bounds round-trip through the parser.
+      | .const ``Int.ofNat _ =>
+          if args.size == 1 then return (← parseScalar? args[0]!)
+      | .const ``Int.negSucc _ =>
+          if args.size == 1 then
+            return (← parseScalar? args[0]!).map (fun n => -(n + 1))
+      | .const ``Dyadic.ofInt _ =>
+          if args.size == 1 then return (← parseScalar? args[0]!)
+      | .const ``Dyadic.ofIntWithPrec _ =>
+          if args.size == 2 then
+            match ← parseScalar? args[0]!, ← parseScalar? args[1]! with
+            | some num, some k => return some (num / ((2 : Rat) ^ k.num.toNat))
+            | _, _ => return none
       | .const ``Neg.neg _ =>
           if args.size == 3 then
             return (← parseScalar? args[2]!).map (fun x => -x)
@@ -158,8 +179,8 @@ partial def parseExpr (e : Expr) : ParseM LinExpr := do
         if let some v ← parseScalar? value then
           return { const := v }
       let ty ← inferType e
-      unless ← isDefEq ty ratType do
-        throwError "lp: expected a Rat expression, found{indentExpr e}"
+      unless ← isDefEq ty (← get).carrier do
+        throwError "lp: expected a {(← get).carrier} expression, found{indentExpr e}"
       addVar id
       return { coeffs := #[(id, 1)] }
   | _ =>
@@ -192,12 +213,25 @@ partial def parseExpr (e : Expr) : ParseM LinExpr := do
       | _ => pure ()
       throwError "lp: unsupported Rat expression{indentExpr e}"
 
-def isRatExpr (e : Expr) : MetaM Bool := do
-  isDefEq (← inferType e) ratType
+/-- Is `e` a term of the goal's carrier type? Checked against the `carrier`
+in `ParseState` (set from the goal), so hypotheses over a different type are
+skipped rather than mis-parsed. -/
+def isCarrierExpr (e : Expr) : ParseM Bool := do
+  isDefEq (← inferType e) (← get).carrier
+
+/-- Does `α` admit a certificate engine? The computable core carriers (`Rat`, `Int`,
+`Dyadic`, `Nat`) are short-circuited (native instances, no synth); any other type is
+accepted iff it carries the ordered-`Field` bundle (`ℝ` etc.). Used by the `∃`/`∀`/
+`maximize` frontends to dispatch on any supported carrier, not just `Rat`. (`isDefEq`,
+not `isConstOf`, so reducible aliases of the core carriers are still recognized.) -/
+def isCarrierType (α : Expr) : MetaM Bool := do
+  for c in [``Rat, ``Int, ``Dyadic, ``Nat] do
+    if ← isDefEq α (mkConst c) then return true
+  return (← synthInstance? (← mkAppM ``Lean.Grind.Field #[α])).isSome
 
 def parseAtomicRat (rel : Rel) (lhs rhs : Expr) :
     ParseM (Option (Rel × Expr × Expr × LinExpr × LinExpr)) := do
-  unless (← isRatExpr lhs) && (← isRatExpr rhs) do
+  unless (← isCarrierExpr lhs) && (← isCarrierExpr rhs) do
     return none
   return some (rel, lhs, rhs, ← parseExpr lhs, ← parseExpr rhs)
 
@@ -232,6 +266,14 @@ def isAnd? (type : Expr) : Option (Expr × Expr) :=
       if args.size == 2 then some (args[0]!, args[1]!) else none
   | _ => none
 
+/-- Pick the carrier-native row-closure lemma name (`Int`/`Dyadic` use their own native
+lemmas; `Field.*` requires a `Field` instance the computable rings lack). -/
+def carrierSubNonposName (intName dyadicName fieldName : Name) : ParseM Name := do
+  let carrier := (← get).carrier
+  if ← isDefEq carrier (mkConst ``Int) then return intName
+  if ← isDefEq carrier (mkConst ``Dyadic) then return dyadicName
+  return fieldName
+
 partial def collectHypProof (origin : Name) (proof : Expr) :
     ParseM (Array Row) := do
   let type ← inferType proof
@@ -245,21 +287,35 @@ partial def collectHypProof (origin : Name) (proof : Expr) :
       throwError "lp: strict hypothesis `{origin}` is not supported"
   | some (.le, lhsExpr, rhsExpr, lhs, rhs) =>
       let row := lhs.sub rhs
+      -- Row closure: `Int` needs native `IntC.*` lemmas (`Field.*` requires a `Field`
+      -- instance `Int` lacks); fields/`Rat`-as-field use `Field.*`.
+      let leName ← carrierSubNonposName ``IntC.sub_nonpos_of_le ``DyadicC.sub_nonpos_of_le
+        ``Field.sub_nonpos_of_le
       return #[{
         term := mkAppM ``HSub.hSub #[lhsExpr, rhsExpr],
         expr := row,
-        proof := mkAppM ``rat_sub_nonpos_of_le #[proof] }]
+        proof := mkAppM leName #[proof],
+        lhsExpr := lhsExpr, rhsExpr := rhsExpr, leProof := pure proof }]
   | some (.eq, lhsExpr, rhsExpr, lhs, rhs) =>
       let d := lhs.sub rhs
+      let eqName ← carrierSubNonposName ``IntC.sub_nonpos_of_eq ``DyadicC.sub_nonpos_of_eq
+        ``Field.sub_nonpos_of_eq
+      -- Both directions of the equality, each also exposed as an `≤` row for the
+      -- `Nat` (no-subtraction) assembly: `lhs ≤ rhs` and `rhs ≤ lhs` via `le_of_eq`.
+      -- (`leProof` is forced only by the `Nat` path; ring carriers use `term`/`proof`.)
       return #[
         {
           term := mkAppM ``HSub.hSub #[lhsExpr, rhsExpr],
           expr := d,
-          proof := mkAppM ``rat_sub_nonpos_of_eq #[proof] },
+          proof := mkAppM eqName #[proof],
+          lhsExpr := lhsExpr, rhsExpr := rhsExpr,
+          leProof := mkAppM ``Nat.le_of_eq #[proof] },
         {
           term := mkAppM ``HSub.hSub #[rhsExpr, lhsExpr],
           expr := d.neg,
-          proof := do mkAppM ``rat_sub_nonpos_of_eq #[← mkEqSymm proof] }]
+          proof := do mkAppM eqName #[← mkEqSymm proof],
+          lhsExpr := rhsExpr, rhsExpr := lhsExpr,
+          leProof := do mkAppM ``Nat.le_of_eq #[← mkEqSymm proof] }]
 
 def collectHyps : ParseM (Array Row) := do
   let mut rows := #[]
