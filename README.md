@@ -1,6 +1,6 @@
 # LPTactic
 
-[![Lean](https://img.shields.io/badge/Lean-4.29.1-blue.svg)](./lean-toolchain)
+[![Lean](https://img.shields.io/badge/Lean-4.31.0--rc1-blue.svg)](./lean-toolchain)
 [![License](https://img.shields.io/github/license/kim-em/lp-tactic.svg)](./LICENSE)
 
 The `by lp` and `maximize` tactics — Π₂ linear-rational-arithmetic
@@ -40,6 +40,26 @@ example (a b : Rat) (_ : 2 * a + b ≤ 5) (_ : a - b ≤ 1) :
 Without any backend registered, `by lp` reports a structured
 "no usable backend" diagnostic listing every registered backend and
 its probe verdict — so the failure mode is obvious.
+
+## Carriers
+
+`by lp` and `maximize` work over a family of ordered carriers, not just `Rat`:
+
+- **`Rat`, `Int`, `Dyadic`, `Nat`** — out of the box (core types).
+- **`Real`, or any `Lean.Grind` ordered field of characteristic 0** — once
+  Mathlib is imported (it supplies the instances).
+
+```lean
+example (a b : Int) (_ : 2 * a + b ≤ 5) (_ : a - b ≤ 1) : 3 * a ≤ 6 := by lp
+example (a b : Nat) (_ : 2 * a + b ≤ 5) (_ : a + b ≤ 3) : 3 * a + 2 * b ≤ 8 := by lp
+-- with `import Mathlib`:
+example (a b : ℝ)  (_ : 2 * a + b ≤ 5) (_ : a - b ≤ 1) : 3 * a ≤ 6 := by lp
+```
+
+The LP sent to the solver is always over ℚ; only the reconstructed proof term is
+over the carrier. `lp` proves ℚ-valid (Farkas) implications — integrality and
+cuts stay with `omega`/`cutsat`, so `Nat` subtraction (truncating) and `Int`/`Nat`
+division are rejected rather than mis-modelled.
 
 ## Layout
 
