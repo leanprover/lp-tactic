@@ -99,10 +99,30 @@ partial def quickScalarLit? (e : Expr) : MetaM (Option Rat) := do
       | _, _ => return none
     return none
 
-/-- Recognise an expression as a reducibly-closed `Rat` scalar, with a
+/-- Which exact-arithmetic operations the carrier supports in linear expressions.
+The `lp` parser interprets `+`/`-`/`*`/`/` with exact field semantics; for carriers
+where an operation is NOT exact it must be rejected, not silently mis-modelled into a
+wrong LP. `Nat` subtraction is truncating (`Nat.sub`); `Int`/`Nat` division is
+integer/floor division. (`Nat` has no `Neg` instance and `Dyadic` no `Div` instance,
+so those never reach the parser.) -/
+structure ScalarCaps where
+  carrier  : Expr
+  allowSub : Bool
+  allowDiv : Bool
+
+/-- Capabilities for a carrier: subtraction is exact except on `Nat`; division is exact
+only on a field (`Rat`/`ℝ`) — never on `Int`/`Nat`. -/
+def scalarCapsFor (carrier : Expr) : MetaM ScalarCaps := do
+  let isNat ← isDefEq carrier (mkConst ``Nat)
+  let isInt ← isDefEq carrier (mkConst ``Int)
+  return { carrier, allowSub := !isNat, allowDiv := !(isNat || isInt) }
+
+/-- Recognise an expression as a reducibly-closed scalar of value `Rat`, with a
   pre-`whnfR` check for `Q.toRat ⟨…⟩` literals so the explicit-proof-term
-  discharger's `mkRatLit` outputs are recognized as scalars. -/
-partial def parseScalar? (e : Expr) : MetaM (Option Rat) := do
+  discharger's `mkRatLit` outputs are recognized as scalars. Rejects (throws on) any
+  occurrence of an operation the carrier does not support exactly (`caps`), so a
+  truncating `Nat.sub` or an `Int`/`Nat` `/` never silently produces a wrong LP. -/
+partial def parseScalar? (caps : ScalarCaps) (e : Expr) : MetaM (Option Rat) := do
   if let some v ← tryQToRat? e then
     return some v
   let e ← withReducible <| whnfR e
@@ -111,7 +131,7 @@ partial def parseScalar? (e : Expr) : MetaM (Option Rat) := do
   match e with
   | .fvar id =>
       match ← fvarLetValue? id with
-      | some value => parseScalar? value
+      | some value => parseScalar? caps value
       | none => return none
   | .lit (.natVal n) =>
       -- Raw `Nat` literal (e.g. `mkNatNum`'s output, or a `Nat`-carrier numeral).
@@ -129,38 +149,48 @@ partial def parseScalar? (e : Expr) : MetaM (Option Rat) := do
       -- frontend-numeral and certificate-leaf renderings), so spliced witnesses
       -- and recomputed bounds round-trip through the parser.
       | .const ``Int.ofNat _ =>
-          if args.size == 1 then return (← parseScalar? args[0]!)
+          if args.size == 1 then return (← parseScalar? caps args[0]!)
       | .const ``Int.negSucc _ =>
           if args.size == 1 then
-            return (← parseScalar? args[0]!).map (fun n => -(n + 1))
+            return (← parseScalar? caps args[0]!).map (fun n => -(n + 1))
       | .const ``Dyadic.ofInt _ =>
-          if args.size == 1 then return (← parseScalar? args[0]!)
+          if args.size == 1 then return (← parseScalar? caps args[0]!)
       | .const ``Dyadic.ofIntWithPrec _ =>
           if args.size == 2 then
-            match ← parseScalar? args[0]!, ← parseScalar? args[1]! with
+            match ← parseScalar? caps args[0]!, ← parseScalar? caps args[1]! with
             | some num, some k => return some (num / ((2 : Rat) ^ k.num.toNat))
             | _, _ => return none
       | .const ``Neg.neg _ =>
           if args.size == 3 then
-            return (← parseScalar? args[2]!).map (fun x => -x)
+            return (← parseScalar? caps args[2]!).map (fun x => -x)
       | .const ``HAdd.hAdd _ =>
           if args.size == 6 then
-            match ← parseScalar? args[4]!, ← parseScalar? args[5]! with
+            match ← parseScalar? caps args[4]!, ← parseScalar? caps args[5]! with
             | some a, some b => return some (a + b)
             | _, _ => return none
       | .const ``HSub.hSub _ =>
+          -- Truncating `Nat.sub` cannot be modelled by the LP; reject outright.
+          unless caps.allowSub do
+            throwError "lp: subtraction over `{caps.carrier}` is truncating (`Nat.sub`) {
+              ""}and is not supported by `lp`; use `cutsat` (or `omega`) for goals {
+              ""}involving `Nat` subtraction"
           if args.size == 6 then
-            match ← parseScalar? args[4]!, ← parseScalar? args[5]! with
+            match ← parseScalar? caps args[4]!, ← parseScalar? caps args[5]! with
             | some a, some b => return some (a - b)
             | _, _ => return none
       | .const ``HMul.hMul _ =>
           if args.size == 6 then
-            match ← parseScalar? args[4]!, ← parseScalar? args[5]! with
+            match ← parseScalar? caps args[4]!, ← parseScalar? caps args[5]! with
             | some a, some b => return some (a * b)
             | _, _ => return none
       | .const ``HDiv.hDiv _ =>
+          -- `Int`/`Nat` `/` is integer/floor division, not the rational quotient.
+          unless caps.allowDiv do
+            throwError "lp: division over `{caps.carrier}` is integer/truncating division {
+              ""}and is not supported by `lp`; use `cutsat` (or `omega`) for goals {
+              ""}involving `Int`/`Nat` division"
           if args.size == 6 then
-            match ← parseScalar? args[4]!, ← parseScalar? args[5]! with
+            match ← parseScalar? caps args[4]!, ← parseScalar? caps args[5]! with
             | some _, some 0 => return none
             | some a, some b => return some (a / b)
             | _, _ => return none
@@ -168,15 +198,16 @@ partial def parseScalar? (e : Expr) : MetaM (Option Rat) := do
       return none
 
 partial def parseExpr (e : Expr) : ParseM LinExpr := do
-  if let some v ← parseScalar? e then
+  let caps ← scalarCapsFor (← get).carrier
+  if let some v ← parseScalar? caps e then
     return { const := v }
   let e ← withReducible <| whnfR e
-  if let some v ← parseScalar? e then
+  if let some v ← parseScalar? caps e then
     return { const := v }
   match e with
   | .fvar id =>
       if let some value ← fvarLetValue? id then
-        if let some v ← parseScalar? value then
+        if let some v ← parseScalar? caps value then
           return { const := v }
       let ty ← inferType e
       unless ← isDefEq ty (← get).carrier do
@@ -191,27 +222,31 @@ partial def parseExpr (e : Expr) : ParseM LinExpr := do
           if args.size == 6 then
             return (← parseExpr args[4]!).add (← parseExpr args[5]!)
       | .const ``HSub.hSub _ =>
+          -- `parseScalar?` above already rejects `Nat` subtraction; ring carriers
+          -- (`Int`/`Dyadic`/field) reach here and subtract exactly.
           if args.size == 6 then
             return (← parseExpr args[4]!).sub (← parseExpr args[5]!)
       | .const ``Neg.neg _ =>
           if args.size == 3 then
             return (← parseExpr args[2]!).neg
       | .const ``OfNat.ofNat _ =>
-          if let some v ← parseScalar? e then
+          if let some v ← parseScalar? caps e then
             return { const := v }
       | .const ``HMul.hMul _ =>
           if args.size == 6 then
             let lhs := args[4]!
             let rhs := args[5]!
-            if let some c ← parseScalar? lhs then
+            if let some c ← parseScalar? caps lhs then
               return (← parseExpr rhs).smul c
-            if let some c ← parseScalar? rhs then
+            if let some c ← parseScalar? caps rhs then
               return (← parseExpr lhs).smul c
-            throwError "lp: nonlinear multiplication; one side of `*` must be a reducibly-closed Rat scalar"
+            throwError "lp: nonlinear multiplication; one side of `*` must be a reducibly-closed scalar"
       | .const ``HDiv.hDiv _ =>
-          throwError "lp: division is outside the supported affine Rat grammar"
+          -- `Int`/`Nat` division is rejected by `parseScalar?`; this is a field
+          -- carrier dividing by a non-constant (nonlinear).
+          throwError "lp: division by a non-constant is outside the supported affine grammar"
       | _ => pure ()
-      throwError "lp: unsupported Rat expression{indentExpr e}"
+      throwError "lp: unsupported {(← get).carrier} expression{indentExpr e}"
 
 /-- Is `e` a term of the goal's carrier type? Checked against the `carrier`
 in `ParseState` (set from the goal), so hypotheses over a different type are
