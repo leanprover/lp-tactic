@@ -40,8 +40,36 @@ Verified-outcome dispatch:
 Strict-hypothesis rejection is inherited from `collectHyps`: strict
 hypotheses throw at parse time before any LP call. -/
 
-def runMaximize (g : MVarId) (hname : Name) (exprE : Expr) :
-    TacticM Unit := g.withContext do
+/-- Inject the certified bound `maximize` produced.
+
+With `boundName = none` this asserts `have hname : exprE ≤ NE := proof` — the
+classic forward-direction form, substituting the numeral `NE` directly.
+
+With `boundName = some m` it first introduces a local definition
+`let m : carrier := NE` and then asserts `have hname : exprE ≤ m := proof`.
+Because `m` is definitionally `NE`, the very same `proof : exprE ≤ NE`
+discharges `exprE ≤ m`; the user is left with a named handle `m` bound to the
+certified maximum and a bound stated against it. -/
+def injectMaxBound (g : MVarId) (hname : Name) (boundName : Option Name)
+    (carrier exprE NE proof : Expr) : TacticM Unit := do
+  match boundName with
+  | none =>
+      let propType ← mkAppM ``LE.le #[exprE, NE]
+      let g' ← g.assert hname propType proof
+      let (_, g'') ← g'.intro1P
+      replaceMainGoal [g'']
+  | some m =>
+      -- `let m : carrier := NE`, then `have hname : exprE ≤ m := proof`.
+      let g1 ← g.define m carrier NE
+      let (mFVar, g2) ← g1.intro1P
+      let g3 ← g2.withContext do
+        let propType ← mkAppM ``LE.le #[exprE, .fvar mFVar]
+        g2.assert hname propType proof
+      let (_, g4) ← g3.intro1P
+      replaceMainGoal [g4]
+
+def runMaximize (g : MVarId) (hname : Name) (boundName : Option Name)
+    (exprE : Expr) : TacticM Unit := g.withContext do
   -- Verify the user's expression has type `Rat`. Surfacing this here
   -- gives a cleaner diagnostic than letting `parseExpr` discover the
   -- mismatch deep inside the affine grammar walker.
@@ -86,10 +114,7 @@ def runMaximize (g : MVarId) (hname : Name) (exprE : Expr) :
     let N := exprLin.const
     let NE ← fctx.mkNumeral N
     let proof ← proveEntailed rows false vars exprE NE
-    let propType ← mkAppM ``LE.le #[exprE, NE]
-    let g' ← g.assert hname propType proof
-    let (_, g'') ← g'.intro1P
-    replaceMainGoal [g'']
+    injectMaxBound g hname boundName carrier exprE NE proof
     return
   let rowDense := rows.map (·.expr.toDense vars)
   let rowConsts := rows.map (·.expr.const)
@@ -128,13 +153,11 @@ def runMaximize (g : MVarId) (hname : Name) (exprE : Expr) :
       -- cost in exchange for sharing the entire closing-lemma and
       -- reflection-equality machinery rather than reproving it.
       let proof ← proveEntailed rows false vars exprE NE
-      let propType ← mkAppM ``LE.le #[exprE, NE]
-      -- Inject as `have hname : prop := proof`. Existing hypotheses
-      -- named `hname` are shadowed (matching `have`'s standard
-      -- behavior); the user can pass an explicit name to avoid that.
-      let g' ← g.assert hname propType proof
-      let (_, g'') ← g'.intro1P
-      replaceMainGoal [g'']
+      -- Inject as `have hname : exprE ≤ N := proof` (or, in the `≤ m`
+      -- into-form, `let m := N` plus `have hname : exprE ≤ m := proof`).
+      -- Existing hypotheses named `hname` are shadowed (matching `have`'s
+      -- standard behavior); the user can pass an explicit name to avoid that.
+      injectMaxBound g hname boundName carrier exprE NE proof
   | .infeasible =>
       -- Hypotheses imply `False`. Reuse the existential-path inconsistency
       -- probe to extract a `False` proof from the dual, then close the
@@ -158,8 +181,14 @@ def runMaximize (g : MVarId) (hname : Name) (exprE : Expr) :
         ""}was produced (status: {repr s})"
 
 /-- `maximize <expr>` injects `have hbound : <expr> ≤ N := <proof>` where
-`N` is the certified maximum of `<expr>` over the local linear
-hypotheses. `maximize h : <expr>` uses `h` as the hypothesis name. -/
+`N` is the certified maximum of `<expr>` over the local linear hypotheses.
+`maximize h : <expr>` uses `h` as the hypothesis name.
+
+`maximize <expr> ≤ m` is the *into-form*: it introduces a local definition
+`let m := N` (a name bound to the certified maximum) and the hypothesis
+`hbound : <expr> ≤ m`. `maximize h : <expr> ≤ m` names the hypothesis `h`.
+Because a `maximize`d expression is always carrier-valued — never a `≤` — the
+trailing `≤ m` (with `m` a bare identifier) is unambiguous. -/
 syntax (name := maximizeStx) "maximize" (atomic(ppSpace ident " : "))? ppSpace term : tactic
 
 elab_rules : tactic
@@ -173,10 +202,17 @@ elab_rules : tactic
             let hname : Name := match h with
               | some id => id.getId
               | none    => `hbound
+            -- Detect the `<expr> ≤ <newName>` into-form: a `≤` whose
+            -- right-hand side is a bare identifier names the let-binding for
+            -- the certified maximum. Anything else is the classic form, where
+            -- the whole term is the carrier-valued expression to maximize.
+            let (exprStx, boundName) ← match e with
+              | `($lhs ≤ $rhs:ident) => pure (lhs, some rhs.getId)
+              | _                    => pure (e, none)
             -- Elaborate freely so the carrier follows the expression's type
             -- (`Rat`, `ℝ`, …); `runMaximize` validates it is an ordered field.
-            let exprE ← Elab.Tactic.elabTerm e none
-            runMaximize g hname exprE
+            let exprE ← Elab.Tactic.elabTerm exprStx none
+            runMaximize g hname boundName exprE
           let newGoals ← getGoals
           setGoals (newGoals ++ rest)
 
