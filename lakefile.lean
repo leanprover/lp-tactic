@@ -32,7 +32,7 @@ lean_lib LPTactic where
 /-- Behavioral tests for the registry. Build via
     `lake build LPTacticTest` or run via `lake test`. -/
 lean_lib LPTacticTest where
-  roots := #[`LPTacticTest.Registry, `LPTacticTest.Runner]
+  roots := #[`LPTacticTest.Registry, `LPTacticTest.Runner, `LPTacticTest.Issue5]
 
 lean_exe «registry-tests» where
   root := `LPTacticTest.Registry
