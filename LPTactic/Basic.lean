@@ -16,10 +16,13 @@
   `SoplexFFI.solveExact` directly. `lp-tactic` itself has no FFI
   dependency.
 -/
+module
 
-import LPCore.Validate
-import LPVerify
-import LPTactic.Registry
+public import LPCore.Validate
+public import LPVerify
+public import LPTactic.Registry
+
+@[expose] public section
 
 namespace LP
 

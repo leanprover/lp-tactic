@@ -5,8 +5,11 @@ multiplier clearing + native scaled/`L=1` closers) — `Dyadic` is a computable 
 ring (no inverses). Scope: integer (and power-of-2) coefficients; the engine renders any
 power-of-2 value via `ofIntWithPrec` (never division — dyadics have no `/`).
 -/
-import LPTactic.LP.CarrierCertificate
-import LPTactic.LP.DyadicGeneric
+module
+public meta import LPTactic.LP.CarrierCertificate
+public import LPTactic.LP.DyadicGeneric
+
+public meta section
 
 open Lean Meta
 

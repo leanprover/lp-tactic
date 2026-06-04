@@ -1,10 +1,13 @@
-import LPTactic.Dispatch
-import LPTactic.LP.BackendOption
-import LPTactic.LP.Certificate
-import LPTactic.LP.FieldCertificate
-import LPTactic.LP.IntCertificate
-import LPTactic.LP.DyadicCertificate
-import LPTactic.LP.NatCertificate
+module
+public meta import LPTactic.Dispatch
+public meta import LPTactic.LP.BackendOption
+public meta import LPTactic.LP.Certificate
+public meta import LPTactic.LP.FieldCertificate
+public meta import LPTactic.LP.IntCertificate
+public meta import LPTactic.LP.DyadicCertificate
+public meta import LPTactic.LP.NatCertificate
+
+public meta section
 
 open Lean Meta Elab Tactic
 open LP LP.Verify

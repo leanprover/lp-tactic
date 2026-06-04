@@ -1,7 +1,10 @@
-import LPTactic.LP.Types
-import LPTactic.LP.FieldGeneric
-import LPTactic.LP.IntGeneric
-import LPTactic.LP.DyadicGeneric
+module
+public meta import LPTactic.LP.Types
+public import LPTactic.LP.FieldGeneric
+public import LPTactic.LP.IntGeneric
+public import LPTactic.LP.DyadicGeneric
+
+public meta section
 
 open Lean Meta Elab Tactic
 open LP LP.Verify

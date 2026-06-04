@@ -5,8 +5,11 @@ inverses), so like `Int` it gets native kernel-reducible literals + `Eq.refl` le
 structural lemmas + scaled closers are needed here. Stated over concrete `Dyadic`; proofs are
 static (`grind` over the core `CommRing`/`OrderedRing Dyadic` instances is fine here).
 -/
-import Init.Data.Dyadic.Instances
-import Init.Grind.Ordered.Ring
+module
+public import Init.Data.Dyadic.Instances
+public import Init.Grind.Ordered.Ring
+
+@[expose] public section
 
 namespace LP.Tactic.LP.Internal.DyadicC
 

@@ -1,4 +1,7 @@
-import LPTactic.LP.Problem
+module
+public import LPTactic.LP.Problem
+
+public meta section
 
 open Lean Meta Elab Tactic
 open LP LP.Verify

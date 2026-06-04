@@ -1,4 +1,7 @@
-import LPTactic.LP.Parse
+module
+public meta import LPTactic.LP.Parse
+
+public meta section
 
 open Lean Meta Elab Tactic
 open LP LP.Verify

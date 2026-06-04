@@ -1,6 +1,9 @@
-import LPTactic.LP.Atomic
-import LPTactic.LP.BackendOption
-import LPTactic.LP.Exists
+module
+public meta import LPTactic.LP.Atomic
+public meta import LPTactic.LP.BackendOption
+public meta import LPTactic.LP.Exists
+
+public meta section
 
 open Lean Meta Elab Tactic
 open LP LP.Verify

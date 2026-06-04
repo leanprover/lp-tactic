@@ -6,8 +6,11 @@ field-specific assembly (rational multipliers stay rational, unscaled `direct_*_
 Also keeps the structural-numeral builders (`mkRatNumeral`) the ∃/maximize frontends use to
 splice primal witnesses. Covers `Rat` (core) and `ℝ` (Mathlib) and any ordered field of char 0.
 -/
-import LPTactic.LP.CarrierCertificate
-import LPTactic.LP.FieldGeneric
+module
+public meta import LPTactic.LP.CarrierCertificate
+public import LPTactic.LP.FieldGeneric
+
+public meta section
 
 open Lean Meta
 open Lean.Grind
