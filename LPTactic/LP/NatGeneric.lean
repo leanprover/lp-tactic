@@ -8,7 +8,7 @@ normalizer never hits neg/sub on `Nat` exprs, so only the `+`/`*`/atom lemmas ar
 -/
 import Init.Grind.Tactics
 
-namespace Soplex.Tactic.LP.Internal.NatC
+namespace LP.Tactic.LP.Internal.NatC
 
 /-! ## Closers (no subtraction). `C` is the nonneg Farkas residual; `Wl ≤ Wr` the weighted hyp
 sum; the identity moves the ring negatives across `=`. -/
@@ -69,4 +69,4 @@ theorem mul_congr_eq_r (k a A : Nat) (e : a = A) : k * a = k * A := by grind
 
 theorem mul_congr_eq_l (a A k : Nat) (e : a = A) : a * k = A * k := by grind
 
-end Soplex.Tactic.LP.Internal.NatC
+end LP.Tactic.LP.Internal.NatC

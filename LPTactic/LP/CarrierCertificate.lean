@@ -16,7 +16,7 @@ import LPTactic.LP.Certificate
 
 open Lean Meta
 
-namespace Soplex.Tactic.LP.Internal
+namespace LP.Tactic.LP.Internal
 
 /-- The per-carrier strategy bundle parametrizing the shared normalizer. Built once per `lp`
 invocation (carrier `α` is fixed), so its closures cache the synthesized instances. -/
@@ -288,4 +288,4 @@ def proveCertificateIdentity (m : CarrierMethods) (vars : Array FVarId) (lhsId :
 
 end CarrierMethods
 
-end Soplex.Tactic.LP.Internal
+end LP.Tactic.LP.Internal

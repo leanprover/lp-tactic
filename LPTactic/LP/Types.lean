@@ -4,10 +4,10 @@ import LPTactic.Basic
 import LPTactic.Q
 
 open Lean Meta Elab Tactic
-open Soplex Soplex.Verify
-open Soplex.Tactic (Q)
+open LP LP.Verify
+open LP.Tactic (Q)
 
-namespace Soplex.Tactic.LP.Internal
+namespace LP.Tactic.LP.Internal
 
 /-! # Direct certificate backend for the `lp` tactic.
 
@@ -40,7 +40,7 @@ theorem rat_lt_of_sub_neg {a b : Rat} (h : a - b < 0) : a < b := by
     using hAdd
 
 theorem rat_le_of_nonneg_sub {a b : Rat} (h : 0 ≤ b - a) : a ≤ b :=
-  Soplex.Verify.RatAux.sub_nonneg.mp h
+  LP.Verify.RatAux.sub_nonneg.mp h
 
 theorem rat_lt_of_pos_sub {a b : Rat} (h : 0 < b - a) : a < b := by
   have hle : a ≤ b := rat_le_of_nonneg_sub (Rat.le_of_lt h)
@@ -56,7 +56,7 @@ theorem rat_smul_nonpos {a lam : Rat} (ha : a ≤ 0) (hlam : 0 ≤ lam) : lam * 
 
 /-- Sum of two nonpositive `Rat`s is nonpositive. -/
 theorem rat_add_nonpos {a b : Rat} (ha : a ≤ 0) (hb : b ≤ 0) : a + b ≤ 0 := by
-  have h := Soplex.Verify.RatAux.add_le_add ha hb
+  have h := LP.Verify.RatAux.add_le_add ha hb
   simpa [Rat.zero_add] using h
 
 /-- Final closer for non-strict goals.
@@ -75,7 +75,7 @@ theorem direct_le_close {lhs rhs s c : Rat}
     grind [Rat.sub_eq_add_neg, Rat.add_assoc, Rat.add_comm, Rat.add_left_comm,
            Rat.add_neg_cancel, Rat.neg_add_cancel, Rat.add_zero, Rat.zero_add, Rat.neg_neg]
   rw [← hStep]
-  exact Soplex.Verify.RatAux.sub_nonneg.mpr (Rat.le_trans hSum hC)
+  exact LP.Verify.RatAux.sub_nonneg.mpr (Rat.le_trans hSum hC)
 
 /-- Final closer for strict goals: same shape as `direct_le_close`, but the
 residual must be strictly positive. -/
@@ -363,4 +363,4 @@ def LinExpr.partitionXY (e : LinExpr) (xs ys : Array FVarId) :
   let β : LinExpr := { coeffs := βCoeffs }
   (β, α, outside)
 
-end Soplex.Tactic.LP.Internal
+end LP.Tactic.LP.Internal

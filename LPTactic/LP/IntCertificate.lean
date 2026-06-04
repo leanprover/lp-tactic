@@ -10,7 +10,7 @@ import LPTactic.LP.IntGeneric
 
 open Lean Meta
 
-namespace Soplex.Tactic.LP.Internal.IntC
+namespace LP.Tactic.LP.Internal.IntC
 
 /-- Render an `Int` value as a native literal (`Int.ofNat k` / `Int.negSucc k`), defeq to a
 user `(k : Int)` `OfNat`/`Neg` literal. -/
@@ -35,7 +35,7 @@ partial def intScalarLit? (e : Expr) : MetaM (Option Rat) := do
 
 /-- Apply an `IntC` lemma by base name (monomorphic — no universe/instance args). -/
 @[inline] def iLemma (name : Name) (args : Array Expr) : Expr :=
-  mkAppN (mkConst ((`Soplex.Tactic.LP.Internal.IntC).append name)) args
+  mkAppN (mkConst ((`LP.Tactic.LP.Internal.IntC).append name)) args
 
 /-- Per-invocation `Int` carrier: the `CarrierMethods` for the unified normalizer plus the
 cached `LE`/`LT` operator Exprs for the O(N) sign-decide proofs. -/
@@ -169,4 +169,4 @@ def ICtx.assembleInfeasibleProof (c : ICtx) (rows : Array Row) (mults : Array Ra
   let hFalse := iLemma `scaled_infeasible_close #[sumExpr, mkIntNum C, sumProof, hC, identProof]
   mkAppOptM ``False.elim #[some goalType, some hFalse]
 
-end Soplex.Tactic.LP.Internal.IntC
+end LP.Tactic.LP.Internal.IntC

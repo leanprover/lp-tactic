@@ -10,7 +10,7 @@ import LPTactic.LP.NatGeneric
 
 open Lean Meta
 
-namespace Soplex.Tactic.LP.Internal.NatC
+namespace LP.Tactic.LP.Internal.NatC
 
 /-- Render a nonneg integer-valued `Rat` as a raw `Nat` literal (defeq to `OfNat`). -/
 def mkNatNum (r : Rat) : Expr := mkRawNatLit r.num.toNat
@@ -24,7 +24,7 @@ partial def natScalarLit? (e : Expr) : MetaM (Option Rat) := do
   | _ => quickScalarLit? e
 
 @[inline] def nLemma (name : Name) (args : Array Expr) : Expr :=
-  mkAppN (mkConst ((`Soplex.Tactic.LP.Internal.NatC).append name)) args
+  mkAppN (mkConst ((`LP.Tactic.LP.Internal.NatC).append name)) args
 
 structure NCtx where
   m    : CarrierMethods
@@ -162,4 +162,4 @@ def NCtx.assembleInfeasibleProof (c : NCtx) (rows : Array Row) (mults : Array Ra
   let hFalse := nLemma `infeasible_close #[Wl, Wr, CE, hW, hC, hId]
   mkAppOptM ``False.elim #[some goalType, some hFalse]
 
-end Soplex.Tactic.LP.Internal.NatC
+end LP.Tactic.LP.Internal.NatC

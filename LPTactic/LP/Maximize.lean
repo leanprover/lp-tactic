@@ -4,10 +4,10 @@ import LPTactic.LP.BackendOption
 import LPTactic.LP.Exists
 
 open Lean Meta Elab Tactic
-open Soplex Soplex.Verify
-open Soplex.Tactic (Q)
+open LP LP.Verify
+open LP.Tactic (Q)
 
-namespace Soplex.Tactic.LP.Internal
+namespace LP.Tactic.LP.Internal
 
 /-! ## Forward-direction `maximize` tactic.
 
@@ -103,7 +103,7 @@ def runMaximize (g : MVarId) (hname : Name) (exprE : Expr) :
     | .error e => throwError "maximize: invalid generated problem: {repr e}"
     | .ok p => pure p
   let sol ←
-    match ← Soplex.LP.dispatchSolveExact opts normalized (← getBackendOverride) with
+    match ← LP.dispatchSolveExact opts normalized (← getBackendOverride) with
     | .error e => throwError "maximize: solveExact failed: {repr e}"
     | .ok sol => pure sol
   match sol.status with
@@ -180,4 +180,4 @@ elab_rules : tactic
           let newGoals ← getGoals
           setGoals (newGoals ++ rest)
 
-end Soplex.Tactic.LP.Internal
+end LP.Tactic.LP.Internal

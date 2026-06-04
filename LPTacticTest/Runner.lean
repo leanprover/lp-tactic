@@ -1,5 +1,5 @@
 /-
-  `lake test` entry point for `kim-em/lp-tactic`. Runs every test
+  `lake test` entry point for `leanprover/lp-tactic`. Runs every test
   suite in the package and imports the example-only files so a
   successful compilation already counts as a passing test.
 -/

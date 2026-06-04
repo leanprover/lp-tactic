@@ -1,10 +1,10 @@
 import LPTactic.LP.Problem
 
 open Lean Meta Elab Tactic
-open Soplex Soplex.Verify
-open Soplex.Tactic (Q)
+open LP LP.Verify
+open LP.Tactic (Q)
 
-namespace Soplex.Tactic.LP.Internal
+namespace LP.Tactic.LP.Internal
 
 /-! ## Tactic-side proof assembly. -/
 
@@ -80,14 +80,14 @@ def mkQLit (r : Rat) : MetaM Expr := do
       let denNeType : Expr := mkApp3 (mkConst ``Ne [Level.succ Level.zero])
         (mkConst ``Nat) denE (mkNatLit 0)
       mkDecideProof denNeType
-  return mkApp3 (mkConst ``Soplex.Tactic.Q.mk) numE denE denNeProof
+  return mkApp3 (mkConst ``LP.Tactic.Q.mk) numE denE denNeProof
 
 /-- Build a `Rat` literal Expr.  We emit a `Q.toRat`-normalized form so
 that the explicit-proof-term discharger can apply `Q.toRat_add`/
 `toRat_mul`/`toRat_neg` without bridging through `Rat.div`-form
 literals. -/
 def mkRatLit (r : Rat) : MetaM Expr := do
-  return mkApp (mkConst ``Soplex.Tactic.Q.toRat) (← mkQLit r)
+  return mkApp (mkConst ``LP.Tactic.Q.toRat) (← mkQLit r)
 
 /--
 Build a Lean expression representing the weighted sum
@@ -287,7 +287,7 @@ def precomputeSpine (L : LinExpr) :
     let (v, c) := L.coeffs[k]!
     let qE ← mkQLit c
     qs := qs.push qE
-    let cE := mkApp (mkConst ``Soplex.Tactic.Q.toRat) qE
+    let cE := mkApp (mkConst ``LP.Tactic.Q.toRat) qE
     heads := heads.push (← mkRatMul cE (Expr.fvar v))
   -- Suffix renderings, built right-to-left so each entry references the next.
   let mut suffix : Array Expr := Array.mkEmpty (n + 1)
@@ -381,9 +381,9 @@ where
         go headA qA suffA headB qB suffB (i+1) (j+1)
       let taE := suffA[i+1]!
       let tbE := suffB[j+1]!
-      let cAE := mkApp (mkConst ``Soplex.Tactic.Q.toRat) qA[i]!
-      let cBE := mkApp (mkConst ``Soplex.Tactic.Q.toRat) qB[j]!
-      let mE := mkApp (mkConst ``Soplex.Tactic.Q.toRat) qmE
+      let cAE := mkApp (mkConst ``LP.Tactic.Q.toRat) qA[i]!
+      let cBE := mkApp (mkConst ``LP.Tactic.Q.toRat) qB[j]!
+      let mE := mkApp (mkConst ``LP.Tactic.Q.toRat) qmE
       if mVal = 0 then
         let pf := mkAppN (mkConst ``combine_zero)
           #[xE, taE, tbE, resPrev, cAE, cBE, pRest, hm]
@@ -415,8 +415,8 @@ where
     let (mVal, qmE, hm) ← proveRatlitMul qkE qA[i]! kVal c
     let xE := Expr.fvar v
     let (restL, pRest, resPrev) ← go qA suffA qkE (i+1)
-    let cE := mkApp (mkConst ``Soplex.Tactic.Q.toRat) qA[i]!
-    let mE := mkApp (mkConst ``Soplex.Tactic.Q.toRat) qmE
+    let cE := mkApp (mkConst ``LP.Tactic.Q.toRat) qA[i]!
+    let mE := mkApp (mkConst ``LP.Tactic.Q.toRat) qmE
     let restE := suffA[i+1]!
     let pf := mkAppN (mkConst ``smul_cons)
       #[kE, xE, cE, mE, restE, resPrev, hm, pRest]
@@ -445,8 +445,8 @@ where
     let (mVal, qmE, hm) ← proveRatlitNeg qA[i]! c
     let xE := Expr.fvar v
     let (restL, pRest, resPrev) ← go qA suffA (i+1)
-    let cE := mkApp (mkConst ``Soplex.Tactic.Q.toRat) qA[i]!
-    let mE := mkApp (mkConst ``Soplex.Tactic.Q.toRat) qmE
+    let cE := mkApp (mkConst ``LP.Tactic.Q.toRat) qA[i]!
+    let mE := mkApp (mkConst ``LP.Tactic.Q.toRat) qmE
     let restE := suffA[i+1]!
     let pf := mkAppN (mkConst ``neg_cons)
       #[xE, cE, mE, restE, resPrev, hm, pRest]
@@ -635,4 +635,4 @@ def proveCertificateIdentity (vars : Array FVarId) (lhsId : Expr)
   let target ← mkEq lhsId cExpr
   mkExpectedTypeHint pfNorm target
 
-end Soplex.Tactic.LP.Internal
+end LP.Tactic.LP.Internal

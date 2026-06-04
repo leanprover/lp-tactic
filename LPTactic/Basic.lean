@@ -5,14 +5,14 @@
   `solveExact`, and `LPVerify.verifyOutcome` into a single
   `LPBackend → Options → Problem → IO (Except SolveError VerifiedSolve)` call.
 
-  This file lives in `kim-em/lp-tactic` (alongside the `by lp` tactic)
+  This file lives in `leanprover/lp-tactic` (alongside the `by lp` tactic)
   rather than in `lp-verify` because the driver actually invokes a
   solver. The verifier itself does no `IO` and knows nothing about
   `solveExact`.
 
-  The synchronous, FFI-specialised entry point `Soplex.solveVerified`
+  The synchronous, FFI-specialised entry point `LP.solveVerified`
   (`Except`-typed, no backend argument) lives in
-  `kim-em/lp-backend-soplex-ffi`, where it can call
+  `leanprover/lp-backend-soplex-ffi`, where it can call
   `SoplexFFI.solveExact` directly. `lp-tactic` itself has no FFI
   dependency.
 -/
@@ -21,9 +21,9 @@ import LPCore.Validate
 import LPVerify
 import LPTactic.Registry
 
-namespace Soplex
+namespace LP
 
-open Soplex.LP
+open LP
 
 /-- Default `denomBudget` for verified-solve drivers: combined
     numerator + denominator bit length per rational coordinate.
@@ -49,7 +49,7 @@ def defaultDenomBudget : Option Nat := some 10000
 
     Lives in `IO` because backends are `IO`-typed (so a future
     subprocess or remote solver can plug in); synchronous backends
-    like `Soplex.Backend.SoplexFFI.backend` just lift their `Except`
+    like `LP.Backend.SoplexFFI.backend` just lift their `Except`
     result with `pure`. -/
 def solveVerifiedWith {m n : Nat} (backend : LPBackend) (opts : Options)
     (p : Problem m n) (denomBudget : Option Nat := defaultDenomBudget) :
@@ -67,4 +67,4 @@ def solveVerifiedWith {m n : Nat} (backend : LPBackend) (opts : Options)
         return .ok { normalized
                      verified := Verify.verifyOutcome opts denomBudget normalized sol }
 
-end Soplex
+end LP

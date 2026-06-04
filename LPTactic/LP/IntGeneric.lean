@@ -9,7 +9,7 @@ by `Eq.refl` (validated), and these structural lemmas are static so the proofs m
 -/
 import Init.Grind.Ordered.Int
 
-namespace Soplex.Tactic.LP.Internal.IntC
+namespace LP.Tactic.LP.Internal.IntC
 
 /-! ## Scaled closers (native `Int.mul`).
 
@@ -109,4 +109,4 @@ theorem sub_to_add_neg (a b : Int) : a - b = a + (-b) := by grind
 
 theorem zero_self_le : (0 : Int) ≤ 0 := by omega
 
-end Soplex.Tactic.LP.Internal.IntC
+end LP.Tactic.LP.Internal.IntC

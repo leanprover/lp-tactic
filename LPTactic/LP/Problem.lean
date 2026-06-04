@@ -1,10 +1,10 @@
 import LPTactic.LP.Parse
 
 open Lean Meta Elab Tactic
-open Soplex Soplex.Verify
-open Soplex.Tactic (Q)
+open LP LP.Verify
+open LP.Tactic (Q)
 
-namespace Soplex.Tactic.LP.Internal
+namespace LP.Tactic.LP.Internal
 
 /-! ## Building the LP problem fed to SoPlex.
 
@@ -39,4 +39,4 @@ def buildProblem (rowDense : Array (Array Rat)) (rowConsts : Array Rat)
     colBounds := Vector.replicate n (none, none) }
 
 
-end Soplex.Tactic.LP.Internal
+end LP.Tactic.LP.Internal

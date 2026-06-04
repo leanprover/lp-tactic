@@ -7,10 +7,10 @@ import LPTactic.LP.DyadicCertificate
 import LPTactic.LP.NatCertificate
 
 open Lean Meta Elab Tactic
-open Soplex Soplex.Verify
-open Soplex.Tactic (Q)
+open LP LP.Verify
+open LP.Tactic (Q)
 
-namespace Soplex.Tactic.LP.Internal
+namespace LP.Tactic.LP.Internal
 
 /-! ## Per-goal driver.
 
@@ -165,7 +165,7 @@ def proveEntailed (rows : Array Row) (strict : Bool)
     | .error e => throwError "lp: invalid generated problem: {repr e}"
     | .ok p => pure p
   let sol ←
-    match ← Soplex.LP.dispatchSolveExact opts normalized (← getBackendOverride) with
+    match ← LP.dispatchSolveExact opts normalized (← getBackendOverride) with
     | .error e => throwError "lp: solveExact failed: {repr e}"
     | .ok sol => pure sol
   -- Handle the unbounded case up front: there is no dual to consume.
@@ -246,4 +246,4 @@ def solveAtomic (g : MVarId) : TacticM Unit := do
             mkAppM ``Field.le_antisymm #[h₁, h₂]
         g.assign proof
 
-end Soplex.Tactic.LP.Internal
+end LP.Tactic.LP.Internal

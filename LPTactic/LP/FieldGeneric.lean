@@ -16,7 +16,7 @@ import Init.Grind.Ordered.Field
 import Init.Grind.Ordered.Linarith
 import Init.Grind.FieldNormNum
 
-namespace Soplex.Tactic.LP.Internal.Field
+namespace LP.Tactic.LP.Internal.Field
 
 open Std
 open Lean.Grind
@@ -161,4 +161,4 @@ theorem sub_to_add_neg (a b : α) : a - b = a + (-b) := AddCommGroup.sub_eq_add_
 
 end Ring
 
-end Soplex.Tactic.LP.Internal.Field
+end LP.Tactic.LP.Internal.Field

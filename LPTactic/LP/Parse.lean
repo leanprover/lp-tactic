@@ -4,10 +4,10 @@ import LPTactic.LP.IntGeneric
 import LPTactic.LP.DyadicGeneric
 
 open Lean Meta Elab Tactic
-open Soplex Soplex.Verify
-open Soplex.Tactic (Q)
+open LP LP.Verify
+open LP.Tactic (Q)
 
-namespace Soplex.Tactic.LP.Internal
+namespace LP.Tactic.LP.Internal
 
 def fvarLetValue? (id : FVarId) : MetaM (Option Expr) := do
   let decl ← id.getDecl
@@ -49,12 +49,12 @@ isn't unfolded out of the parse. -/
 def tryQToRat? (e : Expr) : MetaM (Option Rat) := do
   let fn := e.getAppFn
   let args := e.getAppArgs
-  unless fn.isConstOf ``Soplex.Tactic.Q.toRat && args.size == 1 do
+  unless fn.isConstOf ``LP.Tactic.Q.toRat && args.size == 1 do
     return none
   let q ← whnfR args[0]!
   let qFn := q.getAppFn
   let qArgs := q.getAppArgs
-  unless qFn.isConstOf ``Soplex.Tactic.Q.mk && qArgs.size == 3 do
+  unless qFn.isConstOf ``LP.Tactic.Q.mk && qArgs.size == 3 do
     return none
   let some n ← parseIntLit? qArgs[0]! | return none
   let some d ← parseNatLit? qArgs[1]! | return none
@@ -360,4 +360,4 @@ def collectHyps : ParseM (Array Row) := do
         rows := rows ++ (← collectHypProof decl.userName decl.toExpr)
   return rows
 
-end Soplex.Tactic.LP.Internal
+end LP.Tactic.LP.Internal

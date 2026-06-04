@@ -1,32 +1,36 @@
 # LPTactic
 
 [![Lean](https://img.shields.io/badge/Lean-4.31.0--rc1-blue.svg)](./lean-toolchain)
-[![License](https://img.shields.io/github/license/kim-em/lp-tactic.svg)](./LICENSE)
+[![License](https://img.shields.io/github/license/leanprover/lp-tactic.svg)](./LICENSE)
+
+> **New here? Start at [`leanprover/lp`](https://github.com/leanprover/lp)** — the entry
+> point for the `lp` / `maximize` tactics and the verified LP solver. This repository is one
+> package of that family: the tactics and the backend registry.
 
 The `by lp` and `maximize` tactics — Π₂ linear-rational-arithmetic
 goals reduced to LP solves, with the dual multipliers reconstructed
 into kernel-checked Lean proof terms — plus the `LPBackend` registry
 (`registerBackend`, `resolveBackend`, `availableBackends`), the
-default-backend dispatcher (`Soplex.LP.dispatchSolveExact`), and
+default-backend dispatcher (`LP.dispatchSolveExact`), and
 the backend-pluggable verified-solve driver (`solveVerifiedWith`).
 
 **No `moreLinkArgs`. No FFI dependency.** All solver calls go
 through `LPBackend` values fetched from the registry. A consumer
 who only wants to verify externally-produced certificates can
 depend on this package plus
-[`kim-em/lp-verify`](https://github.com/kim-em/lp-verify) with zero
+[`leanprover/lp-verify`](https://github.com/leanprover/lp-verify) with zero
 native deps. For an actual default-FFI `by lp`, also depend on
-[`kim-em/lp-backend-soplex-ffi`](https://github.com/kim-em/lp-backend-soplex-ffi)
+[`leanprover/lp-backend-soplex-ffi`](https://github.com/leanprover/lp-backend-soplex-ffi)
 (or use the meta-package
-[`kim-em/soplex`](https://github.com/kim-em/soplex), which bundles
+[`leanprover/lp`](https://github.com/leanprover/lp), which bundles
 the FFI backend by default).
 
 ## Quickstart
 
 ```lean
-require LPTactic from git "https://github.com/kim-em/lp-tactic" @ "main"
+require LPTactic from git "https://github.com/leanprover/lp-tactic" @ "main"
 require LPBackendSoplexFFI from git
-  "https://github.com/kim-em/lp-backend-soplex-ffi" @ "main"
+  "https://github.com/leanprover/lp-backend-soplex-ffi" @ "main"
 ```
 
 ```lean
@@ -82,12 +86,12 @@ LPTactic/LP/Certificate.lean
 LPTactic/LP/Frontend.lean  # syntax elaboration entry point
 ```
 
-Declarations remain under `namespace Soplex` (or `Soplex.LP`,
-`Soplex.Tactic.LP`) so consumers writing `Soplex.solveVerifiedWith`
+Declarations remain under `namespace LP` (or `LP`,
+`LP.Tactic.LP`) so consumers writing `LP.solveVerifiedWith`
 or `by lp` resolve to the same definitions regardless of which
 package owns them. The synchronous, FFI-specialised
-`Soplex.solveVerified` (`Except`-typed) lives in
-`kim-em/lp-backend-soplex-ffi`, not here.
+`LP.solveVerified` (`Except`-typed) lives in
+`leanprover/lp-backend-soplex-ffi`, not here.
 
 ## Licence
 

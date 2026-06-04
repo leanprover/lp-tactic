@@ -21,7 +21,7 @@
 import LPCore.Types
 import LPTactic.Registry
 
-namespace Soplex.LP
+namespace LP
 
 /-- Diagnostic for "the registry's auto-fallback found no usable
     backend." Lists each registered backend and its probe verdict. -/
@@ -29,7 +29,7 @@ private def fallbackUnusableDiag
     (backends : Array (LPBackend × Option (Except String Unit))) :
     String :=
   if backends.isEmpty then
-    "lp: no backends are registered (did you `import Soplex` or another `lp-backend-*` package?)"
+    "lp: no backends are registered (did you `import LP` or another `lp-backend-*` package?)"
   else
     "lp: no registered backend was usable:\n" ++
       String.intercalate "\n" (backends.toList.map fun entry =>
@@ -67,4 +67,4 @@ def dispatchSolveExact {m n : Nat} (opts : Options) (p : Problem m n)
     | none =>
       return Except.error (SolveError.bridge (fallbackUnusableDiag backends))
 
-end Soplex.LP
+end LP

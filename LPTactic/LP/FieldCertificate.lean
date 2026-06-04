@@ -12,7 +12,7 @@ import LPTactic.LP.FieldGeneric
 open Lean Meta
 open Lean.Grind
 
-namespace Soplex.Tactic.LP.Internal.Field
+namespace LP.Tactic.LP.Internal.Field
 
 /-- Per-invocation field context: `α`, its universe level, cached operator Exprs, and the
 field/char-0 instances passed to the `ofRat` norm-num lemmas. -/
@@ -148,7 +148,7 @@ partial def CCtx.proveLitEq (c : CCtx) (e : Expr) (r : Rat) : MetaM Expr := do
 
 /-- Apply a `[Field α]`-bundled normalizer lemma with the cached instance prefix. -/
 @[inline] def CCtx.ring (c : CCtx) (name : Name) (args : Array Expr) : Expr :=
-  mkAppN (mkConst ((`Soplex.Tactic.LP.Internal.Field).append name) [c.u]) (#[c.α, c.fieldInst] ++ args)
+  mkAppN (mkConst ((`LP.Tactic.LP.Internal.Field).append name) [c.u]) (#[c.α, c.fieldInst] ++ args)
 
 /-- The `CarrierMethods` for this field. Leaf proofs are PURE: `ofRat_{add,mul,neg}` (which
 state `ofRat (a∘b) = ofRat a ∘ ofRat b`) symm'd into `ofRat a ∘ ofRat b = ofRat (a∘b)`. -/
@@ -236,4 +236,4 @@ def CCtx.assembleInfeasibleProof (c : CCtx) (rows : Array Row) (mults : Array Ra
   let hFalse ← mkAppM ``Field.direct_infeasible_close #[sumProof, ← c.mkLitPos cVal, identProof]
   mkAppOptM ``False.elim #[some goalType, some hFalse]
 
-end Soplex.Tactic.LP.Internal.Field
+end LP.Tactic.LP.Internal.Field

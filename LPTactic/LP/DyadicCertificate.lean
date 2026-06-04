@@ -10,7 +10,7 @@ import LPTactic.LP.DyadicGeneric
 
 open Lean Meta
 
-namespace Soplex.Tactic.LP.Internal.DyadicC
+namespace LP.Tactic.LP.Internal.DyadicC
 
 /-- Build an `Int` literal Expr (`Int.ofNat`/`Int.negSucc`). -/
 def mkIntLitE (n : Int) : Expr :=
@@ -51,7 +51,7 @@ partial def dyadicScalarLit? (e : Expr) : MetaM (Option Rat) := do
   quickScalarLit? e
 
 @[inline] def dLemma (name : Name) (args : Array Expr) : Expr :=
-  mkAppN (mkConst ((`Soplex.Tactic.LP.Internal.DyadicC).append name)) args
+  mkAppN (mkConst ((`LP.Tactic.LP.Internal.DyadicC).append name)) args
 
 structure DCtx where
   m    : CarrierMethods
@@ -174,4 +174,4 @@ def DCtx.assembleInfeasibleProof (c : DCtx) (rows : Array Row) (mults : Array Ra
   let hFalse := dLemma `scaled_infeasible_close #[sumExpr, mkDyadicNum C, sumProof, hC, identProof]
   mkAppOptM ``False.elim #[some goalType, some hFalse]
 
-end Soplex.Tactic.LP.Internal.DyadicC
+end LP.Tactic.LP.Internal.DyadicC

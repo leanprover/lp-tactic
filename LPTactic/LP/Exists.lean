@@ -4,10 +4,10 @@ import LPTactic.LP.BackendOption
 import LPTactic.LP.Forall
 
 open Lean Meta Elab Tactic
-open Soplex Soplex.Verify
-open Soplex.Tactic (Q)
+open LP LP.Verify
+open LP.Tactic (Q)
 
-namespace Soplex.Tactic.LP.Internal
+namespace LP.Tactic.LP.Internal
 
 /-! ## Existential goals (`∃ x₁ … xₙ : Rat, B`).
 
@@ -242,7 +242,7 @@ def tryHypsInconsistent (fctx : FrontendCtx) (rows : Array Row) (vars : Array FV
     | .error _ => return none
     | .ok p => pure p
   let sol ←
-    match ← Soplex.LP.dispatchSolveExact opts normalized (← getBackendOverride) with
+    match ← LP.dispatchSolveExact opts normalized (← getBackendOverride) with
     | .error _ => return none
     | .ok sol => pure sol
   match sol.status with
@@ -379,4 +379,4 @@ partial def solveExistential (solveGoal : MVarId → TacticM Unit)
   | .error (some msg) =>
       throwError "lp(∃): {msg}"
 
-end Soplex.Tactic.LP.Internal
+end LP.Tactic.LP.Internal

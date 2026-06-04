@@ -8,7 +8,7 @@ static (`grind` over the core `CommRing`/`OrderedRing Dyadic` instances is fine 
 import Init.Data.Dyadic.Instances
 import Init.Grind.Ordered.Ring
 
-namespace Soplex.Tactic.LP.Internal.DyadicC
+namespace LP.Tactic.LP.Internal.DyadicC
 
 open Lean.Grind
 
@@ -98,4 +98,4 @@ theorem sub_to_add_neg (a b : Dyadic) : a - b = a + (-b) := by grind
 
 theorem zero_self_le : (0 : Dyadic) ≤ 0 := by grind
 
-end Soplex.Tactic.LP.Internal.DyadicC
+end LP.Tactic.LP.Internal.DyadicC

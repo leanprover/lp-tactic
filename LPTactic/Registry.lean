@@ -17,7 +17,7 @@ import Std.Data.HashMap
 
 open Std
 
-namespace Soplex.LP
+namespace LP
 
 /-- Process-global registry of installed backends, keyed by `name`.
 
@@ -106,4 +106,4 @@ def availableBackends (runProbe : Bool := true) :
   else
     pure (sorted.map (fun b => (b, none)))
 
-end Soplex.LP
+end LP

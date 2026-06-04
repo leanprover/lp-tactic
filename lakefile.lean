@@ -5,7 +5,7 @@ open Lake DSL
 
   The `by lp` and `maximize` tactics, plus the `LPBackend` registry
   (`registerBackend`, `resolveBackend`, `availableBackends`), the
-  default-backend dispatcher (`Soplex.LP.dispatchSolveExact`), and
+  default-backend dispatcher (`LP.dispatchSolveExact`), and
   the backend-pluggable verified-solve driver (`solveVerifiedWith`).
 
   **No FFI dependency.** All solver calls go through `LPBackend`
@@ -15,11 +15,11 @@ open Lake DSL
   native deps in the dependency graph.
 -/
 
-require LPCore from git "https://github.com/kim-em/lp-core" @
-  "8b694db5f88c65b06714de5488edefd238185f60"
+require LPCore from git "https://github.com/leanprover/lp-core" @
+  "70ca150585f8439a830374b5bec602d391addbc9"
 
-require LPVerify from git "https://github.com/kim-em/lp-verify" @
-  "b53657cc4743764487bbd02b7b333991825e4aec"
+require LPVerify from git "https://github.com/leanprover/lp-verify" @
+  "e8e337f4b6c6f666b5dc7b43bc1ae6cc9d15fa05"
 
 package LPTactic
 

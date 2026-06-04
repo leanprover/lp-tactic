@@ -13,7 +13,7 @@
 
 import Lean
 
-namespace Soplex.Tactic.LP
+namespace LP.Tactic.LP
 
 open Lean
 
@@ -23,7 +23,7 @@ open Lean
 register_option lp.backend : String := {
   defValue := ""
   descr    := "Backend name for `by lp` / `by maximize`. Resolved via \
-               `Soplex.LP.resolveBackend`. Empty string means the \
+               `LP.resolveBackend`. Empty string means the \
                registry's priority-based default."
 }
 
@@ -33,4 +33,4 @@ def getBackendOverride [Monad m] [MonadOptions m] : m (Option String) := do
   let s := lp.backend.get (← getOptions)
   if s.isEmpty then return none else return (some s)
 
-end Soplex.Tactic.LP
+end LP.Tactic.LP

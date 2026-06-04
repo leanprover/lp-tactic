@@ -12,7 +12,7 @@ import LPCore
 import LPTactic.Registry
 import LPTactic.Dispatch
 
-open Soplex Soplex.LP
+open LP
 
 namespace LPTacticTest.Registry
 

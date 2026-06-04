@@ -3,10 +3,10 @@ import LPTactic.LP.BackendOption
 import LPTactic.LP.Exists
 
 open Lean Meta Elab Tactic
-open Soplex Soplex.Verify
-open Soplex.Tactic (Q)
+open LP LP.Verify
+open LP.Tactic (Q)
 
-namespace Soplex.Tactic.LP.Internal
+namespace LP.Tactic.LP.Internal
 
 /-- Find the carrier `α` of a hypothesis: the comparison type of an atomic
 `a ≤ b`/`a < b`/`a = b`, descending through `∧`. Used to discharge a goal that is
@@ -79,7 +79,7 @@ elab_rules : tactic
       | some name =>
         withTheReader Core.Context (fun ctx =>
           { ctx with options :=
-              Soplex.Tactic.LP.lp.backend.set ctx.options name }) act
+              LP.Tactic.LP.lp.backend.set ctx.options name }) act
       | none => act
     withBackend do
       let goals ← getGoals
@@ -91,4 +91,4 @@ elab_rules : tactic
           let newGoals ← getGoals
           setGoals (newGoals ++ rest)
 
-end Soplex.Tactic.LP.Internal
+end LP.Tactic.LP.Internal

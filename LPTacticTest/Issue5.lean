@@ -11,7 +11,7 @@
 
   Multi-variable Farkas-style inconsistency cases for the same goal
   shapes live in the consumer test suites
-  (`SoplexTest/LP.lean`, `LPBackendPureTest/LPParity.lean`), where a
+  (`LPTest/LP.lean`, `LPBackendPureTest/LPParity.lean`), where a
   backend is registered.
 -/
 
