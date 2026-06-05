@@ -10,8 +10,11 @@
   - per-call `(backend := <ident>)` (see `Frontend.lean`): override
     the option for a single call.
 -/
+module
 
-import Lean
+public import Lean
+
+@[expose] public section
 
 namespace LP.Tactic.LP
 

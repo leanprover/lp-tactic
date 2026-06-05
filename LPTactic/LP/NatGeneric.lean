@@ -6,7 +6,10 @@ IDENTITY `L·rhs + Wl = L·lhs + Wr + C`, add-cancellation (`Wl`/`Wr`) and mul-c
 (`L>0`) give `lhs ≤ rhs`. Native kernel-reducible `Nat` literals (`Eq.refl` leaves). The
 normalizer never hits neg/sub on `Nat` exprs, so only the `+`/`*`/atom lemmas are needed.
 -/
-import Init.Grind.Tactics
+module
+public import Init.Grind.Tactics
+
+@[expose] public section
 
 namespace LP.Tactic.LP.Internal.NatC
 

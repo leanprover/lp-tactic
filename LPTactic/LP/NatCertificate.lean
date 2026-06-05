@@ -5,8 +5,11 @@ negation), so the assembly is the no-subtraction Farkas: a two-sided weighted hy
 L·lhs + Wr + C`, closed by add/mul-cancellation (`NatGeneric`). The unified `normalizeR` proves
 the identity (both sides → same sorted form); native `Nat` literals give `Eq.refl` leaves.
 -/
-import LPTactic.LP.CarrierCertificate
-import LPTactic.LP.NatGeneric
+module
+public meta import LPTactic.LP.CarrierCertificate
+public import LPTactic.LP.NatGeneric
+
+public meta section
 
 open Lean Meta
 

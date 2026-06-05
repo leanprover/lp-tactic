@@ -12,9 +12,12 @@ and any ordered field of characteristic zero.
 These are static lemmas, so the proofs may use `grind`/`simp` (the prohibition on
 tactic calls applies only to the per-certificate *tactic runtime*, not here).
 -/
-import Init.Grind.Ordered.Field
-import Init.Grind.Ordered.Linarith
-import Init.Grind.FieldNormNum
+module
+public import Init.Grind.Ordered.Field
+public import Init.Grind.Ordered.Linarith
+public import Init.Grind.FieldNormNum
+
+@[expose] public section
 
 namespace LP.Tactic.LP.Internal.Field
 

@@ -1,6 +1,9 @@
-import LPTactic.Dispatch
-import LPTactic.LP.BackendOption
-import LPTactic.LP.Certificate
+module
+public meta import LPTactic.Dispatch
+public meta import LPTactic.LP.BackendOption
+public meta import LPTactic.LP.Certificate
+
+public meta section
 
 open Lean Meta Elab Tactic
 open LP LP.Verify

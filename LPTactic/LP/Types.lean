@@ -1,7 +1,10 @@
-import Lean
-import Init.Data.Vector.Lemmas
-import LPTactic.Basic
-import LPTactic.Q
+module
+public meta import Lean
+public import Init.Data.Vector.Lemmas
+public import LPTactic.Basic
+public import LPTactic.Q
+
+public meta section
 
 open Lean Meta Elab Tactic
 open LP LP.Verify

@@ -17,15 +17,18 @@
   A backend must be `import`ed somewhere up the dependency chain for
   it to self-register and appear in `availableBackends`.
 -/
+module
 
-import LPCore.Types
-import LPTactic.Registry
+public import LPCore.Types
+public import LPTactic.Registry
+
+@[expose] public section
 
 namespace LP
 
 /-- Diagnostic for "the registry's auto-fallback found no usable
     backend." Lists each registered backend and its probe verdict. -/
-private def fallbackUnusableDiag
+def fallbackUnusableDiag
     (backends : Array (LPBackend × Option (Except String Unit))) :
     String :=
   if backends.isEmpty then

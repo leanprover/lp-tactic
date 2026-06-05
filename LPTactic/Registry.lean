@@ -11,9 +11,12 @@
   tactic's default-backend fallback walks `availableBackends` in
   priority order and picks the first one whose `probe` succeeds.
 -/
+module
 
-import LPCore.Backend
-import Std.Data.HashMap
+public import LPCore.Backend
+public import Std.Data.HashMap
+
+@[expose] public section
 
 open Std
 

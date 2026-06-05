@@ -1,7 +1,10 @@
-import LPTactic.Dispatch
-import LPTactic.LP.Atomic
-import LPTactic.LP.BackendOption
-import LPTactic.LP.Forall
+module
+public meta import LPTactic.Dispatch
+public meta import LPTactic.LP.Atomic
+public meta import LPTactic.LP.BackendOption
+public meta import LPTactic.LP.Forall
+
+public meta section
 
 open Lean Meta Elab Tactic
 open LP LP.Verify

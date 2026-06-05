@@ -12,7 +12,10 @@ The structural walk (`normalizeR`/`proveMerge`/`proveSmul`/`proveNeg`/`render`/s
 explicit, share only the skeleton). NO tactic calls on the hot path; uses `quickScalarLit?`
 (never the O(N²) recursive `parseScalar?`) — the lesson banked from the Int prototype.
 -/
-import LPTactic.LP.Certificate
+module
+public meta import LPTactic.LP.Certificate
+
+public meta section
 
 open Lean Meta
 

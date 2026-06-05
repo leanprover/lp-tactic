@@ -7,7 +7,10 @@ point. `Int` is a computable ordered commutative ring: leaf coefficient equaliti
 by `Eq.refl` (validated), and these structural lemmas are static so the proofs may use
 `grind`/`omega` (the runtime-tactic prohibition applies to the tactic, not to these).
 -/
-import Init.Grind.Ordered.Int
+module
+public import Init.Grind.Ordered.Int
+
+@[expose] public section
 
 namespace LP.Tactic.LP.Internal.IntC
 

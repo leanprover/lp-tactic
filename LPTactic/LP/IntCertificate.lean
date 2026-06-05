@@ -5,8 +5,11 @@ faster than the OLD Rat engine) and the thin `Int`-specific assembly (multiplier
 native-`Int.mul` scaled/unscaled closers). The structural normalizer lives in
 `CarrierCertificate.lean`; only the per-carrier strategy + assembly are here.
 -/
-import LPTactic.LP.CarrierCertificate
-import LPTactic.LP.IntGeneric
+module
+public meta import LPTactic.LP.CarrierCertificate
+public import LPTactic.LP.IntGeneric
+
+public meta section
 
 open Lean Meta
 
