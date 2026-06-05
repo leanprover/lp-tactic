@@ -212,7 +212,41 @@ partial def parseScalar? (caps : ScalarCaps) (e : Expr) : MetaM (Option Rat) := 
       | _ => return none
       return none
 
+/-- Canonicalize an atom `Expr` into a stable LP-variable key: strip metadata and
+instantiate assigned mvars; reject terms with unassigned/level mvars or loose bvars
+(unstable or out of context). Used identically by the parser and the certificate
+normalizer so their atom keys agree. -/
+def canonAtom (e : Expr) : MetaM (Option Expr) := do
+  let e ← instantiateMVars e.consumeMData
+  if e.hasExprMVar || e.hasLevelMVar || e.hasLooseBVars then return none
+  return some e
+
+/-- Turn a carrier-typed opaque subterm into a *virtual* LP variable: a fresh `FVarId`
+recorded in the atom table and deduplicated by canonical `Expr`, so identical atoms share
+a variable. Returns `none` when atomization is off, the term is not of the carrier type, or
+it fails `canonAtom` hygiene. The virtual fvar only ever keys `LinExpr`; the proof term uses
+the stored `Expr` (never `Expr.fvar` of a virtual). -/
+def atomVar (e : Expr) : ParseM (Option FVarId) := do
+  unless (← get).allowAtoms do return none
+  unless ← isDefEq (← inferType e) (← get).carrier do return none
+  let some a ← canonAtom e | return none
+  if let some fv := (← get).atomToFVar[a]? then return some fv
+  let fv ← mkFreshFVarId
+  modify fun s => { s with
+    atomToFVar := s.atomToFVar.insert a fv
+    fvarToAtom := s.fvarToAtom.insert fv a }
+  addVar fv
+  return some fv
+
+/-- At a parse dead-end, atomize the (original, pre-`whnf`) term if atomization is on,
+else fail with `msg`. -/
+def atomOrThrow (e : Expr) (msg : MessageData) : ParseM LinExpr := do
+  if let some fv ← atomVar e then
+    return { coeffs := #[(fv, 1)] }
+  throwError msg
+
 partial def parseExpr (e : Expr) : ParseM LinExpr := do
+  let eOrig := e
   let caps ← scalarCapsFor (← get).carrier
   if let some v ← parseScalar? caps e then
     return { const := v }
@@ -255,7 +289,7 @@ partial def parseExpr (e : Expr) : ParseM LinExpr := do
               return (← parseExpr rhs).smul c
             if let some c ← parseScalar? caps rhs then
               return (← parseExpr lhs).smul c
-            throwError "lp: nonlinear multiplication; one side of `*` must be a reducibly-closed scalar"
+            return ← atomOrThrow eOrig "lp: nonlinear multiplication; one side of `*` must be a reducibly-closed scalar"
       | .const ``HDiv.hDiv _ =>
           -- `e / c` with `c` a reducibly-closed nonzero scalar is the affine `(1/c) • e`
           -- (e.g. `x / 2`), kept linear rather than atomized. `Int`/`Nat` `/` is integer
@@ -266,9 +300,10 @@ partial def parseExpr (e : Expr) : ParseM LinExpr := do
               if c == 0 then
                 throwError "lp: division by the zero constant"
               return (← parseExpr args[4]!).smul (1 / c)
-          throwError "lp: division is outside the supported affine grammar"
+          return ← atomOrThrow eOrig "lp: division is outside the supported affine grammar"
       | _ => pure ()
-      throwError "lp: unsupported {(← get).carrier} expression{indentExpr e}"
+      let carrier := (← get).carrier
+      atomOrThrow eOrig m!"lp: unsupported {carrier} expression{indentExpr e}"
 
 /-- Is `e` a term of the goal's carrier type? Checked against the `carrier`
 in `ParseState` (set from the goal), so hypotheses over a different type are

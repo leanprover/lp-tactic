@@ -283,7 +283,29 @@ structure ParseState where
   checked against this; hypotheses over a different type are skipped. Defaults
   to `Rat` so existing `Rat`-only entry points need no change. -/
   carrier : Expr := ratType
+  /-- Atomization (the atomic path only). When `true`, an unrecognized carrier-typed
+  subterm (`π`, `↑n`, `‖x‖`, `f x`, `x*y`, …) becomes an opaque LP variable instead of a
+  parse error. The `∃`/`∀`/`maximize` frontends leave this `false` so their binder
+  variables stay genuine fvars. -/
+  allowAtoms : Bool := false
+  /-- Atom table: each opaque atom is given a fresh *virtual* `FVarId` (never a real local;
+  it only keys `LinExpr` and is mapped back to its `Expr` for the proof term). Deduplicated
+  by canonical atom `Expr` so identical atoms share a variable. -/
+  atomToFVar : Std.HashMap Expr FVarId := {}
+  fvarToAtom : Std.HashMap FVarId Expr := {}
   deriving Inhabited
+
+/-- The atom-table half the certificate normalizer needs: virtual-fvar → atom `Expr`
+(to reconstruct proof-term subterms) and atom `Expr` → virtual-fvar (to re-key on reparse). -/
+structure AtomTable where
+  fvarToAtom : Std.HashMap FVarId Expr := {}
+  atomToFVar : Std.HashMap Expr FVarId := {}
+  deriving Inhabited
+
+/-- Reconstruct the `Expr` an LP variable stands for: the stored atom for a virtual
+fvar, else the real local `Expr.fvar`. -/
+def AtomTable.keyToExpr (t : AtomTable) (v : FVarId) : Expr :=
+  t.fvarToAtom.getD v (Expr.fvar v)
 
 abbrev ParseM := StateT ParseState MetaM
 
