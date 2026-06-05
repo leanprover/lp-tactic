@@ -37,6 +37,10 @@ theorem rat_sub_nonpos_of_eq {a b : Rat} (h : a = b) : a - b ≤ 0 := by
   subst h
   simp [Rat.sub_eq_add_neg, Rat.add_neg_cancel]
 
+/-- Rewrite `e / c` as the scalar multiple `c⁻¹ * e` so the normalizer can reuse the
+scalar-multiplication path. Holds unconditionally (at `c = 0` both sides are `0`). -/
+theorem rat_div_eq_inv_mul (a b : Rat) : a / b = b⁻¹ * a := by grind
+
 theorem rat_lt_of_sub_neg {a b : Rat} (h : a - b < 0) : a < b := by
   have hAdd := (Rat.add_lt_add_right (a := a - b) (b := 0) (c := b)).mpr h
   simpa [Rat.sub_eq_add_neg, Rat.add_assoc, Rat.neg_add_cancel, Rat.add_zero, Rat.zero_add]

@@ -277,6 +277,19 @@ partial def normalizeR (m : CarrierMethods) (vars : Array FVarId) (e : Expr) :
               (m.mkEqTrans m1 m2 rL mulComm (m.mkEqTrans m2 m3 rL stepR ps)), rL)
           else
             throwError "lp: nonlinear multiplication{indentExpr e}"
+      | .const ``HDiv.hDiv _ =>
+          let dividend := args[4]!; let divisor := args[5]!
+          -- `e / c = c⁻¹ * e` (true even at `c = 0`); recurse through the scalar-mul
+          -- path, which recognises the closed inverse `c⁻¹` as the scalar `1/c`.
+          if let some cVal ← m.scalarLit? divisor then
+            if cVal == 0 then
+              throwError "lp: division by the zero constant{indentExpr e}"
+            let invE ← mkAppM ``Inv.inv #[divisor]
+            let mulE := m.mkMul invE dividend
+            let (L, pInner, rL) ← m.normalizeR vars mulE
+            let pDiv := m.applyLemma `div_eq_inv_mul #[dividend, divisor]
+            return (L, m.mkEqTrans e mulE rL pDiv pInner, rL)
+          throwError "lp: division is outside the supported affine grammar{indentExpr e}"
       | _ => throwError "lp: unsupported expression{indentExpr e}"
 
 /-- Normalize `lhsId` and check it cancels to the constant `cVal` (as a `Rat`). -/

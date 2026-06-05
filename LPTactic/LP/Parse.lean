@@ -100,6 +100,11 @@ partial def quickScalarLit? (e : Expr) : MetaM (Option Rat) := do
       | some _, some 0 => return none
       | some a, some b => return some (a / b)
       | _, _ => return none
+    if fn.isConstOf ``Inv.inv && args.size == 3 then
+      match ← quickScalarLit? args[2]! with
+      | some 0 => return none
+      | some a => return some (1 / a)
+      | none => return none
     return none
 
 /-- Which exact-arithmetic operations the carrier supports in linear expressions.
@@ -197,6 +202,13 @@ partial def parseScalar? (caps : ScalarCaps) (e : Expr) : MetaM (Option Rat) := 
             | some _, some 0 => return none
             | some a, some b => return some (a / b)
             | _, _ => return none
+      | .const ``Inv.inv _ =>
+          -- A closed scalar inverse `c⁻¹` (e.g. `2⁻¹` = ½) over a field carrier.
+          if caps.allowDiv && args.size == 3 then
+            match ← parseScalar? caps args[2]! with
+            | some 0 => return none
+            | some a => return some (1 / a)
+            | none => return none
       | _ => return none
       return none
 
@@ -245,8 +257,15 @@ partial def parseExpr (e : Expr) : ParseM LinExpr := do
               return (← parseExpr lhs).smul c
             throwError "lp: nonlinear multiplication; one side of `*` must be a reducibly-closed scalar"
       | .const ``HDiv.hDiv _ =>
-          -- `Int`/`Nat` division is rejected by `parseScalar?` above; reaching here
-          -- means a field carrier with a non-closed-scalar `/` (e.g. `x / 2`, `2 / x`).
+          -- `e / c` with `c` a reducibly-closed nonzero scalar is the affine `(1/c) • e`
+          -- (e.g. `x / 2`), kept linear rather than atomized. `Int`/`Nat` `/` is integer
+          -- division, rejected by `parseScalar?` above. Division by a non-constant
+          -- (`2 / x`, `x / y`) stays unsupported here (atomized once that lands).
+          if args.size == 6 then
+            if let some c ← parseScalar? caps args[5]! then
+              if c == 0 then
+                throwError "lp: division by the zero constant"
+              return (← parseExpr args[4]!).smul (1 / c)
           throwError "lp: division is outside the supported affine grammar"
       | _ => pure ()
       throwError "lp: unsupported {(← get).carrier} expression{indentExpr e}"
