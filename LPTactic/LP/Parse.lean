@@ -212,15 +212,6 @@ partial def parseScalar? (caps : ScalarCaps) (e : Expr) : MetaM (Option Rat) := 
       | _ => return none
       return none
 
-/-- Canonicalize an atom `Expr` into a stable LP-variable key: strip metadata and
-instantiate assigned mvars; reject terms with unassigned/level mvars or loose bvars
-(unstable or out of context). Used identically by the parser and the certificate
-normalizer so their atom keys agree. -/
-def canonAtom (e : Expr) : MetaM (Option Expr) := do
-  let e ← instantiateMVars e.consumeMData
-  if e.hasExprMVar || e.hasLevelMVar || e.hasLooseBVars then return none
-  return some e
-
 /-- Turn a carrier-typed opaque subterm into a *virtual* LP variable: a fresh `FVarId`
 recorded in the atom table and deduplicated by canonical `Expr`, so identical atoms share
 a variable. Returns `none` when atomization is off, the term is not of the carrier type, or

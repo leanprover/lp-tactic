@@ -307,6 +307,15 @@ fvar, else the real local `Expr.fvar`. -/
 def AtomTable.keyToExpr (t : AtomTable) (v : FVarId) : Expr :=
   t.fvarToAtom.getD v (Expr.fvar v)
 
+/-- Canonicalize an atom `Expr` into a stable LP-variable key: strip metadata and
+instantiate assigned mvars; reject terms with unassigned/level mvars or loose bvars
+(unstable or out of context). Used identically by the parser and the certificate
+normalizer so their atom keys agree. -/
+def canonAtom (e : Expr) : MetaM (Option Expr) := do
+  let e ← instantiateMVars e.consumeMData
+  if e.hasExprMVar || e.hasLevelMVar || e.hasLooseBVars then return none
+  return some e
+
 abbrev ParseM := StateT ParseState MetaM
 
 def addVar (fvarId : FVarId) : ParseM Unit := do

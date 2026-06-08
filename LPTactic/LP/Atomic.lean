@@ -27,7 +27,7 @@ and the trivial closed-goal short-circuit (where multipliers are all
 zero and `c = objLin.const`). -/
 def assembleLeProof (rows : Array Row) (strict : Bool)
     (objLin : LinExpr) (mults : Array Rat) (vars : Array FVarId)
-    (lhs rhs : Expr) : TacticM Expr := do
+    (lhs rhs : Expr) (atoms : AtomTable := {}) : TacticM Expr := do
   let rowLins := rows.map (·.expr)
   let residual := computeResidual objLin rowLins mults
   unless isLinExprClosed residual do
@@ -53,7 +53,7 @@ def assembleLeProof (rows : Array Row) (strict : Bool)
   let cExpr ← mkRatLit c
   let lhsId ← mkRatAdd rhsMinusLhs sumExpr
   -- Explicit-proof-term discharge of `lhsId = c`.
-  let identProof ← proveCertificateIdentity vars lhsId c
+  let identProof ← proveCertificateIdentity vars lhsId c atoms
   -- Build the final closer by explicit-argument application instead of
   -- `mkAppM`. The four implicits (`lhs`, `rhs`, `s`, `c`) are already in
   -- hand here, so making `mkAppM` rediscover them by `isDefEq` over the
@@ -73,7 +73,8 @@ discharger (`buildWeightedSumAndProof`/`mkRatLit`/`direct_infeasible_close`). Mi
 `Field.assembleInfeasibleProof` but produces the byte-for-byte shipped `Rat` proof term,
 avoiding the generic `ofRat` literal bridge. -/
 def assembleInfeasibleProofRat (rows : Array Row) (strict : Bool)
-    (mults : Array Rat) (vars : Array FVarId) (lhs rhs : Expr) : TacticM Expr := do
+    (mults : Array Rat) (vars : Array FVarId) (lhs rhs : Expr)
+    (atoms : AtomTable := {}) : TacticM Expr := do
   let rowLins := rows.map (·.expr)
   let residual := computeResidual {} rowLins mults
   unless isLinExprClosed residual do
@@ -90,7 +91,7 @@ def assembleInfeasibleProofRat (rows : Array Row) (strict : Bool)
       entries := entries.push (lam, ← row.term, ← row.proof)
   let (sumExpr, sumProof) ← buildWeightedSumAndProof entries
   let cExpr ← mkRatLit c
-  let identProof ← proveCertificateIdentity vars sumExpr c
+  let identProof ← proveCertificateIdentity vars sumExpr c atoms
   let hC ← mkDecideProof (← mkAppM ``LT.lt #[(← mkRatLit 0), cExpr])
   let hFalse := mkAppN (mkConst ``direct_infeasible_close)
     #[sumExpr, cExpr, sumProof, hC, identProof]
@@ -99,15 +100,19 @@ def assembleInfeasibleProofRat (rows : Array Row) (strict : Bool)
   mkAppOptM ``False.elim #[some goalType, some hFalse]
 
 def proveEntailed (rows : Array Row) (strict : Bool)
-    (vars : Array FVarId) (lhs rhs : Expr) : TacticM Expr := do
+    (vars : Array FVarId) (lhs rhs : Expr) (atoms : AtomTable := {}) : TacticM Expr := do
   -- Objective: `rhs - lhs` as a `LinExpr`. Parse against the goal's carrier
   -- (not the default `Rat`) so non-`Rat` atoms like `(x : ℝ)` are accepted.
+  -- Reuse the hypothesis parse's atom table so a goal atom (`‖x‖`, `π`, …) maps to
+  -- the *same* virtual LP variable the hypotheses used, keeping the certificate consistent.
   let carrier ← inferType lhs
   let (objLin, _) ←
     (do
       let lhsLin ← parseExpr lhs
       let rhsLin ← parseExpr rhs
-      pure (rhsLin.sub lhsLin)).run { vars := vars, carrier }
+      pure (rhsLin.sub lhsLin)).run
+        { vars := vars, carrier, allowAtoms := true
+          atomToFVar := atoms.atomToFVar, fvarToAtom := atoms.fvarToAtom }
   -- Short-circuit when the goal is purely a closed `Rat` comparison: no
   -- rows are needed, no SoPlex call is needed, and the empty-sum direct
   -- certificate is enough. The wider `isLinExprClosed objLin` case is
@@ -144,10 +149,10 @@ def proveEntailed (rows : Array Row) (strict : Bool)
   let assembleOptimal (mults : Array Rat) : TacticM Expr :=
     match nctx?, ictx?, dctx?, cctx? with
     | some nc, _, _, _ => nc.assembleLeProof rows strict objLin mults vars lhs rhs
-    | _, some ic, _, _ => ic.assembleLeProof rows strict objLin mults vars lhs rhs
-    | _, _, some dc, _ => dc.assembleLeProof rows strict objLin mults vars lhs rhs
-    | _, _, _, none    => assembleLeProof rows strict objLin mults vars lhs rhs
-    | _, _, _, some c  => c.assembleLeProof rows strict objLin mults vars lhs rhs
+    | _, some ic, _, _ => ic.assembleLeProof rows strict objLin mults vars lhs rhs atoms
+    | _, _, some dc, _ => dc.assembleLeProof rows strict objLin mults vars lhs rhs atoms
+    | _, _, _, none    => assembleLeProof rows strict objLin mults vars lhs rhs atoms
+    | _, _, _, some c  => c.assembleLeProof rows strict objLin mults vars lhs rhs atoms
   if canShortcut then
     let mults := Array.replicate rows.size (0 : Rat)
     return ← assembleOptimal mults
@@ -194,10 +199,10 @@ def proveEntailed (rows : Array Row) (strict : Bool)
         if strict then mkAppM ``LT.lt #[lhs, rhs] else mkAppM ``LE.le #[lhs, rhs]
       match nctx?, ictx?, dctx?, cctx? with
       | some nc, _, _, _ => nc.assembleInfeasibleProof rows mults vars goalType
-      | _, some ic, _, _ => ic.assembleInfeasibleProof rows mults vars goalType
-      | _, _, some dc, _ => dc.assembleInfeasibleProof rows mults vars goalType
-      | _, _, _, none    => assembleInfeasibleProofRat rows strict mults vars lhs rhs
-      | _, _, _, some c  => c.assembleInfeasibleProof rows mults vars goalType
+      | _, some ic, _, _ => ic.assembleInfeasibleProof rows mults vars goalType atoms
+      | _, _, some dc, _ => dc.assembleInfeasibleProof rows mults vars goalType atoms
+      | _, _, _, none    => assembleInfeasibleProofRat rows strict mults vars lhs rhs atoms
+      | _, _, _, some c  => c.assembleInfeasibleProof rows mults vars goalType atoms
   | s =>
       throwError "lp: solver outcome was unchecked: {repr s}"
 /-- The carrier type `α` of an atomic comparison goal `lhs op rhs` — the first
@@ -222,19 +227,21 @@ def solveAtomic (g : MVarId) : TacticM Unit := do
     let ((parsed?, rows), st) ← (do
       let p ← parseAtomic? target
       let hs ← collectHyps
-      pure (p, hs)).run { carrier }
+      pure (p, hs)).run { carrier, allowAtoms := true }
+    -- Atom table shared by the goal re-parse and the certificate normalizer.
+    let atoms : AtomTable := { fvarToAtom := st.fvarToAtom, atomToFVar := st.atomToFVar }
     let some (rel, lhsExpr, rhsExpr, _, _) := parsed?
       | throwError "lp: goal is not an atomic comparison over {carrier}"
     match rel with
     | .le =>
-        let proof ← proveEntailed rows false st.vars lhsExpr rhsExpr
+        let proof ← proveEntailed rows false st.vars lhsExpr rhsExpr atoms
         g.assign proof
     | .lt =>
-        let proof ← proveEntailed rows true st.vars lhsExpr rhsExpr
+        let proof ← proveEntailed rows true st.vars lhsExpr rhsExpr atoms
         g.assign proof
     | .eq =>
-        let h₁ ← proveEntailed rows false st.vars lhsExpr rhsExpr
-        let h₂ ← proveEntailed rows false st.vars rhsExpr lhsExpr
+        let h₁ ← proveEntailed rows false st.vars lhsExpr rhsExpr atoms
+        let h₂ ← proveEntailed rows false st.vars rhsExpr lhsExpr atoms
         -- Carrier-native antisymmetry: `Field.le_antisymm` still *requires* a `Field`
         -- instance (its `omit` only drops it from the proof, not the signature), so `Int`
         -- must use `IntC.le_antisymm`. No `Field.*` lemma touches the `Int` path.

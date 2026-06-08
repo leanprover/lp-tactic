@@ -40,8 +40,9 @@ def solveInconsistent (g : MVarId) (target : Expr) : TacticM Unit := g.withConte
     | throwError "lp: goal{indentExpr target}\nis not an atomic comparison or `∃`, and no {
         ""}linear hypothesis over a supported carrier was found to derive it from"
   let fctx ← mkFrontendCtx carrier
-  let (rows, st) ← (collectHyps).run { carrier }
-  match ← tryHypsInconsistent fctx rows st.vars target with
+  let (rows, st) ← (collectHyps).run { carrier, allowAtoms := true }
+  let atoms : AtomTable := { fvarToAtom := st.fvarToAtom, atomToFVar := st.atomToFVar }
+  match ← tryHypsInconsistent fctx rows st.vars target atoms with
   | some proof => g.assign proof
   | none =>
       throwError "lp: goal{indentExpr target}\nis not an atomic comparison, and the {
