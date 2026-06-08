@@ -47,6 +47,10 @@ structure CarrierMethods where
   applyLemma : Name → Array Expr → Expr
   /-- `Eq.trans` for the carrier, no `isDefEq` middle-term unification -/
   mkEqTrans : Expr → Expr → Expr → Expr → Expr → Expr
+  /-- Atomization table: maps each LP variable key back to its `Expr` (a real `fvar`
+  for ordinary atoms, or the stored opaque-atom `Expr` for a virtual fvar). Injected by
+  the atomic path; empty for the binder frontends. -/
+  atoms : AtomTable := {}
 
 namespace CarrierMethods
 
@@ -61,8 +65,18 @@ def render (m : CarrierMethods) (L : LinExpr) : Expr := Id.run do
   for i in [0:L.coeffs.size] do
     let idx := L.coeffs.size - 1 - i
     let (v, coef) := L.coeffs[idx]!
-    acc := m.mkAdd (m.mkMul (m.mkLit coef) (Expr.fvar v)) acc
+    acc := m.mkAdd (m.mkMul (m.mkLit coef) (m.atoms.keyToExpr v)) acc
   return acc
+
+/-- Normalize an opaque atom subterm `e`: look up the virtual LP variable the parser
+assigned it and emit `e = 1*v + 0` via `atom_norm`. Errors cleanly if `e` was not atomized. -/
+def normalizeAtom (m : CarrierMethods) (e : Expr) : MetaM (LinExpr × Expr × Expr) := do
+  let some a ← canonAtom e
+    | throwError "lp: unsupported expression{indentExpr e}"
+  let some v := m.atoms.atomToFVar[a]?
+    | throwError "lp: atom not registered during parsing{indentExpr e}"
+  let L : LinExpr := {coeffs := #[(v, 1)]}
+  return (L, m.applyLemma `atom_norm #[e], m.render L)
 
 /-- Precompute heads `cₖ*xₖ`, coefficient Exprs, and shared suffix renderings. -/
 def precomputeSpine (m : CarrierMethods) (L : LinExpr) :
@@ -74,7 +88,7 @@ def precomputeSpine (m : CarrierMethods) (L : LinExpr) :
     let (v, coef) := L.coeffs[k]!
     let qE := m.mkLit coef
     qs := qs.push qE
-    heads := heads.push (m.mkMul qE (Expr.fvar v))
+    heads := heads.push (m.mkMul qE (m.atoms.keyToExpr v))
   let mut suffix : Array Expr := Array.mkEmpty (n + 1)
   suffix := suffix.push (m.mkLit L.const)
   for _ in [0:n] do
@@ -136,7 +150,7 @@ where
       let mVal := cA + cB
       let mE := m.mkLit mVal
       let hm := m.litAddPf cA cB
-      let xE := Expr.fvar vA
+      let xE := m.atoms.keyToExpr vA
       let (restL, pRest, resPrev) ← go headA qA suffA headB qB suffB (i+1) (j+1)
       let taE := suffA[i+1]!; let tbE := suffB[j+1]!
       let cAE := qA[i]!; let cBE := qB[j]!
@@ -164,7 +178,7 @@ where
     let mVal := kVal * coef
     let mE := m.mkLit mVal
     let hm := m.litMulPf kVal coef
-    let xE := Expr.fvar v
+    let xE := m.atoms.keyToExpr v
     let (restL, pRest, resPrev) ← go qA suffA (i+1)
     let cE := qA[i]!; let restE := suffA[i+1]!
     let pf := m.applyLemma `smul_cons #[kE, xE, cE, mE, restE, resPrev, hm, pRest]
@@ -187,7 +201,7 @@ where
     let mVal := -coef
     let mE := m.mkLit mVal
     let hm := m.litNegPf coef
-    let xE := Expr.fvar v
+    let xE := m.atoms.keyToExpr v
     let (restL, pRest, resPrev) ← go qA suffA (i+1)
     let cE := qA[i]!; let restE := suffA[i+1]!
     let pf := m.applyLemma `neg_cons #[xE, cE, mE, restE, resPrev, hm, pRest]
@@ -276,7 +290,7 @@ partial def normalizeR (m : CarrierMethods) (vars : Array FVarId) (e : Expr) :
             return (L, m.mkEqTrans e m1 rL stepRc
               (m.mkEqTrans m1 m2 rL mulComm (m.mkEqTrans m2 m3 rL stepR ps)), rL)
           else
-            throwError "lp: nonlinear multiplication{indentExpr e}"
+            m.normalizeAtom e
       | .const ``HDiv.hDiv _ =>
           let dividend := args[4]!; let divisor := args[5]!
           -- `e / c = c⁻¹ * e` (true even at `c = 0`); recurse through the scalar-mul
@@ -289,8 +303,8 @@ partial def normalizeR (m : CarrierMethods) (vars : Array FVarId) (e : Expr) :
             let (L, pInner, rL) ← m.normalizeR vars mulE
             let pDiv := m.applyLemma `div_eq_inv_mul #[dividend, divisor]
             return (L, m.mkEqTrans e mulE rL pDiv pInner, rL)
-          throwError "lp: division is outside the supported affine grammar{indentExpr e}"
-      | _ => throwError "lp: unsupported expression{indentExpr e}"
+          m.normalizeAtom e
+      | _ => m.normalizeAtom e
 
 /-- Normalize `lhsId` and check it cancels to the constant `cVal` (as a `Rat`). -/
 def proveCertificateIdentity (m : CarrierMethods) (vars : Array FVarId) (lhsId : Expr)
