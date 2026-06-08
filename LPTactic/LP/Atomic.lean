@@ -99,6 +99,24 @@ def assembleInfeasibleProofRat (rows : Array Row) (strict : Bool)
     if strict then mkAppM ``LT.lt #[lhs, rhs] else mkAppM ``LE.le #[lhs, rhs]
   mkAppOptM ``False.elim #[some goalType, some hFalse]
 
+/-- For the `Nat` carrier, build a `0 ≤ x` row for each LP variable. lp's columns are free
+(unbounded below), but every `Nat` value is `≥ 0`; linarith gets this from its ℕ→ℤ
+preprocessing. We instead add an explicit row per variable, discharged by `Nat.zero_le` (so the
+ring `term`/`proof` are never forced — the `Nat` assembly only reads `leProof`). Atoms count
+too: an opaque `Nat` subterm (e.g. truncated `a - b`) is also `≥ 0`. -/
+def natNonnegRows (vars : Array FVarId) (atoms : AtomTable) : MetaM (Array Row) :=
+  vars.mapM fun v => do
+    let xE := atoms.keyToExpr v
+    let leProof ← mkAppM ``Nat.zero_le #[xE]
+    -- The `0` exactly as it appears in `leProof`'s type, so the `Nat` assembly's weighted
+    -- `Σ kᵢ·lhsᵢ ≤ Σ kᵢ·rhsᵢ` stays syntactically consistent.
+    let zeroE := ((← inferType leProof).getAppArgs)[2]!
+    pure {
+      term := throwError "lp: Nat nonneg row has no ring term (forced on non-Nat path)"
+      proof := throwError "lp: Nat nonneg row has no ring proof (forced on non-Nat path)"
+      expr := { coeffs := #[(v, -1)] }
+      lhsExpr := zeroE, rhsExpr := xE, leProof := pure leProof }
+
 def proveEntailed (rows : Array Row) (strict : Bool)
     (vars : Array FVarId) (lhs rhs : Expr) (atoms : AtomTable := {}) : TacticM Expr := do
   -- Objective: `rhs - lhs` as a `LinExpr`. Parse against the goal's carrier
@@ -146,6 +164,10 @@ def proveEntailed (rows : Array Row) (strict : Bool)
     if isDyadic then pure (some (← DyadicC.mkDCtx)) else pure none
   let nctx? : Option NatC.NCtx ←
     if isNat then pure (some (← NatC.mkNCtx)) else pure none
+  -- ℕ nonnegativity: add a `0 ≤ x` row per variable for the `Nat` carrier (lp's columns are
+  -- free, but ℕ values are `≥ 0`), so goals like `0 ≤ n` or `n ≤ n + m` aren't spuriously
+  -- reported unbounded. No-op for other carriers.
+  let rows ← if isNat then pure (rows ++ (← natNonnegRows vars atoms)) else pure rows
   let assembleOptimal (mults : Array Rat) : TacticM Expr :=
     match nctx?, ictx?, dctx?, cctx? with
     | some nc, _, _, _ => nc.assembleLeProof rows strict objLin mults vars lhs rhs
