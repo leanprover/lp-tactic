@@ -98,6 +98,9 @@ theorem combine_zero (x ta tb res c' c : Int) (e : ta + tb = res) (hm : c' + c =
 theorem smul_cons (k x c m rest rest' : Int) (hm : k * c = m) (e : k * rest = rest') :
     k * (c * x + rest) = m * x + rest' := by grind
 
+theorem smul_cons_zero (k x c rest rest' : Int) (hm : k * c = 0) (e : k * rest = rest') :
+    k * (c * x + rest) = rest' := by grind
+
 theorem neg_cons (x c m rest rest' : Int) (hm : -c = m) (e : -rest = rest') :
     -(c * x + rest) = m * x + rest' := by grind
 

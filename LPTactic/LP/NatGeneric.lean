@@ -66,6 +66,9 @@ theorem combine_zero (x ta tb res c' c : Nat) (e : ta + tb = res) (hm : c' + c =
 theorem smul_cons (k x c m rest rest' : Nat) (hm : k * c = m) (e : k * rest = rest') :
     k * (c * x + rest) = m * x + rest' := by grind
 
+theorem smul_cons_zero (k x c rest rest' : Nat) (hm : k * c = 0) (e : k * rest = rest') :
+    k * (c * x + rest) = rest' := by grind
+
 theorem add_congr_eq (a A b B : Nat) (ha : a = A) (hb : b = B) : a + b = A + B := by grind
 
 theorem mul_congr_eq_r (k a A : Nat) (e : a = A) : k * a = k * A := by grind

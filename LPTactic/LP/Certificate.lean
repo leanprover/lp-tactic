@@ -432,11 +432,15 @@ where
     let cE := mkApp (mkConst ``LP.Tactic.Q.toRat) qA[i]!
     let mE := mkApp (mkConst ``LP.Tactic.Q.toRat) qmE
     let restE := suffA[i+1]!
-    let pf := mkAppN (mkConst ``smul_cons)
-      #[kE, xE, cE, mE, restE, resPrev, hm, pRest]
     if mVal = 0 then
+      -- `k * c = 0`: the `m * x` head drops. Use the `_zero` lemma so the proof's RHS
+      -- matches the dropped render (`smul_cons` would keep a stray `0 * x` term).
+      let pf := mkAppN (mkConst ``smul_cons_zero)
+        #[kE, xE, cE, restE, resPrev, hm, pRest]
       return (restL, pf, resPrev)
     else
+      let pf := mkAppN (mkConst ``smul_cons)
+        #[kE, xE, cE, mE, restE, resPrev, hm, pRest]
       let newHead ← mkRatMul mE xE
       let resE ← mkRatAdd newHead resPrev
       return ({ restL with coeffs := #[(v, mVal)] ++ restL.coeffs }, pf, resE)

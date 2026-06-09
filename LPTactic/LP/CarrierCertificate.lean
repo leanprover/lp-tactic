@@ -181,10 +181,13 @@ where
     let xE := m.atoms.keyToExpr v
     let (restL, pRest, resPrev) ← go qA suffA (i+1)
     let cE := qA[i]!; let restE := suffA[i+1]!
-    let pf := m.applyLemma `smul_cons #[kE, xE, cE, mE, restE, resPrev, hm, pRest]
     if mVal == 0 then
+      -- `k * c = 0`: the `m * x` head drops. Use the `_zero` lemma so the proof's RHS
+      -- matches the dropped render (`smul_cons` would keep a stray `0 * x` term).
+      let pf := m.applyLemma `smul_cons_zero #[kE, xE, cE, restE, resPrev, hm, pRest]
       return (restL, pf, resPrev)
     else
+      let pf := m.applyLemma `smul_cons #[kE, xE, cE, mE, restE, resPrev, hm, pRest]
       return ({ restL with coeffs := #[(v, mVal)] ++ restL.coeffs }, pf,
         m.mkAdd (m.mkMul mE xE) resPrev)
 

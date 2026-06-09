@@ -149,6 +149,15 @@ theorem smul_cons (k x c m rest rest' : α) (hm : k * c = m) (e : k * rest = res
     k * (c * x + rest) = m * x + rest' := by
   subst hm; subst e; rw [Semiring.left_distrib, Semiring.mul_assoc]
 
+theorem smul_cons_zero (k x c rest rest' : α)
+    (hm : k * c = Field.NormNum.ofRat 0) (e : k * rest = rest') :
+    k * (c * x + rest) = rest' := by
+  subst e
+  -- `hm` lands on `ofRat 0` (defeq to `0` over `Rat` but not over `ℝ`); bridge via `ofRat_zero`.
+  have hm0 : k * c = 0 := by rw [hm, ofRat_zero]
+  have hzero : k * (c * x) = 0 := by rw [← Semiring.mul_assoc, hm0, Semiring.zero_mul]
+  rw [Semiring.left_distrib, hzero, AddCommMonoid.zero_add]
+
 theorem neg_cons (x c m rest rest' : α) (hm : -c = m) (e : -rest = rest') :
     -(c * x + rest) = m * x + rest' := by
   subst hm; subst e; rw [AddCommGroup.neg_add, Ring.neg_mul]
