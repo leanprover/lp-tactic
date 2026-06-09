@@ -77,6 +77,12 @@ genuinely compound `(2+3) * x` is not short-circuited here, but
 `normalize` still handles it via its structural `HAdd` path. -/
 partial def quickScalarLit? (e : Expr) : MetaM (Option Rat) := do
   if let some v ← tryQToRat? e then return some v
+  -- Match `parseScalar?`'s reducible `whnf` so a reducibly-wrapped scalar (a `@[reducible]`
+  -- abbrev, a cast, …) is recognized identically by the parser and the certificate normalizer.
+  -- Cheap: a row body (`HAdd`/`HSub` head, not reducible) stays put and is rejected in O(1).
+  let e ← withReducible <| whnfR e
+  -- Re-test for a `Q.toRat` literal exposed by the unfolding (as `parseScalar?` does).
+  if let some v ← tryQToRat? e then return some v
   match e with
   | .fvar id =>
       match ← fvarLetValue? id with
