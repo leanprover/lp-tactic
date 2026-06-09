@@ -232,14 +232,21 @@ objective (`max 0 subject to H`) so we probe only the consistency of `H`; the ca
 def tryHypsInconsistent (fctx : FrontendCtx) (rows : Array Row) (vars : Array FVarId)
     (goalType : Expr) (atoms : AtomTable := {}) : MetaM (Option Expr) := do
   if rows.size = 0 then return none
-  -- Zero-variable special case: every row is a closed `c ≤ 0` fact. A row with
-  -- `const > 0` is *itself* `False`; certify it with multiplier 1 on that row.
+  -- Zero-variable special case: every row is a closed fact. A `≤` row with `const > 0` is
+  -- itself `False` (`0 < const ≤ 0`); a strict (`<`) row with `const ≥ 0` is itself `0 < 0`
+  -- (`const < 0` but `const ≥ 0`). Either way, certify with multiplier 1 on that row.
   -- (SoPlex aborts on 0-column problems, so we never call it here.)
   if vars.size = 0 then
     for h : i in [0:rows.size] do
-      if isLinExprClosed rows[i].expr && decide (0 < rows[i].expr.const) then
+      let c := rows[i].expr.const
+      let contradictory := if rows[i].strict then decide (0 ≤ c) else decide (0 < c)
+      if isLinExprClosed rows[i].expr && contradictory then
         let mults := (Array.replicate rows.size (0 : Rat)).set! i 1
-        return some (← fctx.mkContradiction rows mults vars goalType atoms)
+        -- Best-effort: a strict (`c = 0`) row over a carrier whose assembler lacks strict
+        -- support (`Int`/`Nat`/`Dyadic`) throws — skip it and keep scanning for a usable row
+        -- (e.g. a later non-strict `c > 0` contradiction that every carrier handles).
+        try return some (← fctx.mkContradiction rows mults vars goalType atoms)
+        catch _ => pure ()
     return none
   let rowDense := rows.map (·.expr.toDense vars)
   let rowConsts := rows.map (·.expr.const)
@@ -265,7 +272,37 @@ def tryHypsInconsistent (fctx : FrontendCtx) (rows : Array Row) (vars : Array FV
       unless isLinExprClosed residual do return none
       unless decide (0 < residual.const) do return none
       return some (← fctx.mkContradiction rows mults vars goalType atoms)
-  | _ => return none
+  | _ =>
+      -- The *relaxed* (`≤`) system is feasible, but the strict (`<`) hypotheses may still
+      -- make it infeasible (e.g. `a < b, b ≤ a`). Probe with the strict-margin LP: if its
+      -- dual cancels the variables to a nonnegative constant with a positive multiplier on a
+      -- strict row, the weighted sum is `< 0 = c ≥ 0`, certifying `0 < 0`. The assembly
+      -- re-validates the dual, so a genuinely strict-feasible system just fails the checks.
+      let strictFlags := rows.map (·.strict)
+      unless strictFlags.any (·) do return none
+      let pS := buildStrictProblem rowDense rowConsts strictFlags vars.size hSize
+      let optsS : Options := { ({} : Options) with sense := .maximize, presolve := false }
+      let normS ← match validate pS with
+        | .error _ => return none
+        | .ok p => pure p
+      let solS ← match ← LP.dispatchSolveExact optsS normS (← getBackendOverride) with
+        | .error _ => return none
+        | .ok s => pure s
+      match solS.status with
+      | .optimal =>
+          let some d := solS.certificate.dual | return none
+          let mults := d.rowUpper.toArray
+          unless mults.all (fun lam => 0 ≤ lam) do return none
+          let residual := computeResidual {} (rows.map (·.expr)) mults
+          unless isLinExprClosed residual do return none
+          unless decide (0 ≤ residual.const) do return none
+          -- A positive multiplier must land on a strict row (else the sum stays `≤ 0`).
+          let mut hasStrictPos := false
+          for h : i in [0:rows.size] do
+            if rows[i].strict && mults[i]! != 0 then hasStrictPos := true
+          unless hasStrictPos do return none
+          return some (← fctx.mkContradiction rows mults vars goalType atoms)
+      | _ => return none
 
 /-- Apply `Exists.intro` with the given witness to `g`, returning the
 metavariable for the body proof obligation. The witness must be a

@@ -65,9 +65,19 @@ partial def solveGoal (g : MVarId) : TacticM Unit := do
       -- Atomic comparison → the normal discharger; otherwise (e.g. `False`) fall
       -- back to certifying the hypotheses inconsistent. Decide on the RAW goal
       -- type (the `whnfR` `target` may have unfolded a `Rat` `≤` to a `Bool` `=`).
-      match relCarrier? (← instantiateMVars (← g.getType)) with
+      let rawGoal ← instantiateMVars (← g.getType)
+      match relCarrier? rawGoal with
       | some _ => solveAtomic g
-      | none => solveInconsistent g (← instantiateMVars (← g.getType))
+      | none =>
+          -- A negation / `≠` goal `¬P` (`Ne`/`Not` need default-transparency `whnf` to expose
+          -- the `P → False` arrow that reducible `intros` left intact): introduce `P` as a
+          -- hypothesis and prove `False`, so the strict-aware inconsistency check can use it.
+          let ty ← whnf rawGoal
+          if ty.isArrow && ty.bindingBody!.isConstOf ``False then
+            let (_, g') ← g.intro1
+            solveGoal g'
+          else
+            solveInconsistent g rawGoal
 
 /-- The `lp` tactic. Optional `(backend := <name>)` argument pins a
     specific backend by name for this call only, overriding any
