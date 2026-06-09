@@ -170,6 +170,16 @@ theorem smul_cons (k x c m rest rest' : Rat)
   subst hm; subst e
   rw [Rat.mul_add, Rat.mul_assoc]
 
+/-- `smul` walk step when the scaled coefficient vanishes (`k * c = 0`): the `m * x`
+head drops, so the result is just `rest'`. Used when scaling by `k = 0` (a literal
+`0 * e`), keeping the proof's RHS in step with the dropped render term. -/
+theorem smul_cons_zero (k x c rest rest' : Rat)
+    (hm : k * c = 0) (e : k * rest = rest') :
+    k * (c * x + rest) = rest' := by
+  subst e
+  have hzero : k * (c * x) = 0 := by rw [← Rat.mul_assoc, hm, Rat.zero_mul]
+  rw [Rat.mul_add, hzero, Rat.zero_add]
+
 /-- `neg` walk step: negation pushes through one rendered head. -/
 theorem neg_cons (x c m rest rest' : Rat)
     (hm : -c = m) (e : -rest = rest') :

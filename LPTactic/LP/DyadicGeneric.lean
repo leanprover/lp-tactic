@@ -87,6 +87,9 @@ theorem combine_zero (x ta tb res c' c : Dyadic) (e : ta + tb = res) (hm : c' + 
 theorem smul_cons (k x c m rest rest' : Dyadic) (hm : k * c = m) (e : k * rest = rest') :
     k * (c * x + rest) = m * x + rest' := by grind
 
+theorem smul_cons_zero (k x c rest rest' : Dyadic) (hm : k * c = 0) (e : k * rest = rest') :
+    k * (c * x + rest) = rest' := by grind
+
 theorem neg_cons (x c m rest rest' : Dyadic) (hm : -c = m) (e : -rest = rest') :
     -(c * x + rest) = m * x + rest' := by grind
 
