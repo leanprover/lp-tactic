@@ -90,35 +90,58 @@ def clearMultipliers (mults : Array Rat) (cst : Rat) : MetaM (Int × Array Int �
   unless cV.den == 1 do throwError "lp(int): cleared residual {cV} not integral"
   return (Li, ks, cV.num)
 
-def collectEntries (rows : Array Row) (ks : Array Int) :
-    MetaM (Array (Int × Expr × Expr)) := do
-  let mut entries : Array (Int × Expr × Expr) := #[]
+def collectEntries (rows : Array Row) (ks : Array Int) (wantStrict : Bool) :
+    MetaM (Array (Int × Expr × Expr × Option Expr)) := do
+  let mut entries : Array (Int × Expr × Expr × Option Expr) := #[]
   for h : i in [0:rows.size] do
     let k := ks[i]!
     if k ≠ 0 then
-      entries := entries.push (k, ← rows[i].term, ← rows[i].proof)
+      let sp? ← if wantStrict && rows[i].strict then pure (some (← rows[i].strictProof))
+                else pure none
+      entries := entries.push (k, ← rows[i].term, ← rows[i].proof, sp?)
   return entries
 
 /-- `Σ kᵢ * termᵢ : Int` with a proof it is `≤ 0`. Sign lemmas applied with EXPLICIT implicit
 args (no per-row typeclass inference); decide types built from the cached `leFn`. -/
-def ICtx.buildWeightedSum (c : ICtx) (entries : Array (Int × Expr × Expr)) :
-    MetaM (Expr × Expr) := do
+def ICtx.buildWeightedSum (c : ICtx) (entries : Array (Int × Expr × Expr × Option Expr)) :
+    MetaM (Expr × Expr × Bool) := do
   if entries.size = 0 then
-    return (c.mkLit 0, iLemma `zero_self_le #[])
-  let mkHead (k : Int) (term hRow : Expr) : MetaM (Expr × Expr) := do
+    return (c.mkLit 0, iLemma `zero_self_le #[], false)
+  -- A scaled head `k * term`, strict (`< 0`) for a strict row with positive multiplier.
+  let mkHead (k : Int) (term hRow : Expr) (sp? : Option Expr) :
+      MetaM (Expr × Expr × Bool) := do
     let kE := mkIntNum k
     let head := c.m.mkMul kE term
-    let hk ← mkDecideProof (c.mkLe (mkIntNum 0) kE)
-    return (head, iLemma `int_smul_nonpos #[term, kE, hRow, hk])
+    match sp? with
+    | some sp =>
+      let hk ← mkDecideProof (c.mkLt (mkIntNum 0) kE)
+      return (head, iLemma `int_smul_neg #[term, kE, sp, hk], true)
+    | none =>
+      let hk ← mkDecideProof (c.mkLe (mkIntNum 0) kE)
+      return (head, iLemma `int_smul_nonpos #[term, kE, hRow, hk], false)
   let n := entries.size
-  let (kₖ, termₖ, hRowₖ) := entries[n - 1]!
-  let mut (sumExpr, sumProof) ← mkHead kₖ termₖ hRowₖ
+  let (kₖ, termₖ, hRowₖ, spₖ?) := entries[n - 1]!
+  let (sₖ, pₖ, strictₖ) ← mkHead kₖ termₖ hRowₖ spₖ?
+  let mut sumExpr := sₖ
+  let mut sumProof := pₖ
+  let mut sumStrict := strictₖ
   for i in [0:n-1] do
-    let (k, term, hRow) := entries[n - 2 - i]!
-    let (head, headProof) ← mkHead k term hRow
-    sumProof := iLemma `int_add_nonpos #[head, sumExpr, headProof, sumProof]
+    let (k, term, hRow, sp?) := entries[n - 2 - i]!
+    let (head, headProof, headStrict) ← mkHead k term hRow sp?
+    let (newProof, newStrict) :=
+      if headStrict then
+        -- `head < 0`; weaken a strict rest to `≤ 0` for `int_add_neg_nonpos`.
+        let restLe := if sumStrict then iLemma `int_le_of_lt #[sumExpr, mkIntNum 0, sumProof]
+                      else sumProof
+        (iLemma `int_add_neg_nonpos #[head, sumExpr, headProof, restLe], true)
+      else if sumStrict then
+        (iLemma `int_add_nonpos_neg #[head, sumExpr, headProof, sumProof], true)
+      else
+        (iLemma `int_add_nonpos #[head, sumExpr, headProof, sumProof], false)
     sumExpr := c.m.mkAdd head sumExpr
-  return (sumExpr, sumProof)
+    sumProof := newProof
+    sumStrict := newStrict
+  return (sumExpr, sumProof, sumStrict)
 
 /-- Optimal-branch certificate over `Int`. L=1 (the common integer-multiplier case): no goal
 scaling, unscaled closer. L>1: scaled identity + scaled closer. -/
@@ -130,19 +153,28 @@ def ICtx.assembleLeProof (c : ICtx) (rows : Array Row) (strict : Bool)
   unless isLinExprClosed residual do
     throwError "lp: dual certificate did not algebraically cancel the goal"
   let cVal := residual.const
-  if strict then
-    unless decide (0 < cVal) do throwError "lp: goal not entailed; residual {cVal} not > 0"
-  else
-    unless decide (0 ≤ cVal) do throwError "lp: goal not entailed; residual {cVal} not ≥ 0"
   let (Li, ks, C) ← clearMultipliers mults cVal
   let CE := mkIntNum C
-  let (sumExpr, sumProof) ← c.buildWeightedSum (← collectEntries rows ks)
+  let (sumExpr, sumProof, sumStrict) ← c.buildWeightedSum (← collectEntries rows ks strict)
+  -- Residual sign: a strict goal needs `0 < c`, UNLESS a strict row made the sum strict.
+  if strict then
+    if sumStrict then
+      unless decide (0 ≤ cVal) do throwError "lp: goal not entailed; residual {cVal} not ≥ 0"
+    else
+      unless decide (0 < cVal) do throwError "lp: goal not entailed; residual {cVal} not > 0 {
+        ""}(no strict hypothesis available to upgrade it)"
+  else
+    unless decide (0 ≤ cVal) do throwError "lp: goal not entailed; residual {cVal} not ≥ 0"
   if Li == 1 then
     let lhsId := c.m.mkAdd (c.m.mkSub rhs lhs) sumExpr
     let identProof ← ({ c.m with atoms }).proveCertificateIdentity vars lhsId (C : Rat)
     if strict then
-      let hC ← mkDecideProof (c.mkLt (mkIntNum 0) CE)
-      return iLemma `lt_close #[lhs, rhs, sumExpr, CE, sumProof, hC, identProof]
+      if sumStrict then
+        let hC ← mkDecideProof (c.mkLe (mkIntNum 0) CE)
+        return iLemma `lt_close_strict #[lhs, rhs, sumExpr, CE, sumProof, hC, identProof]
+      else
+        let hC ← mkDecideProof (c.mkLt (mkIntNum 0) CE)
+        return iLemma `lt_close #[lhs, rhs, sumExpr, CE, sumProof, hC, identProof]
     else
       let hC ← mkDecideProof (c.mkLe (mkIntNum 0) CE)
       return iLemma `le_close #[lhs, rhs, sumExpr, CE, sumProof, hC, identProof]
@@ -151,8 +183,12 @@ def ICtx.assembleLeProof (c : ICtx) (rows : Array Row) (strict : Bool)
   let identProof ← ({ c.m with atoms }).proveCertificateIdentity vars lhsId (C : Rat)
   let hL ← mkDecideProof (c.mkLt (mkIntNum 0) LE)
   if strict then
-    let hC ← mkDecideProof (c.mkLt (mkIntNum 0) CE)
-    return iLemma `scaled_lt_close #[LE, lhs, rhs, sumExpr, CE, hL, sumProof, hC, identProof]
+    if sumStrict then
+      let hC ← mkDecideProof (c.mkLe (mkIntNum 0) CE)
+      return iLemma `scaled_lt_close_strict #[LE, lhs, rhs, sumExpr, CE, hL, sumProof, hC, identProof]
+    else
+      let hC ← mkDecideProof (c.mkLt (mkIntNum 0) CE)
+      return iLemma `scaled_lt_close #[LE, lhs, rhs, sumExpr, CE, hL, sumProof, hC, identProof]
   else
     let hC ← mkDecideProof (c.mkLe (mkIntNum 0) CE)
     return iLemma `scaled_le_close #[LE, lhs, rhs, sumExpr, CE, hL, sumProof, hC, identProof]
@@ -164,12 +200,21 @@ def ICtx.assembleInfeasibleProof (c : ICtx) (rows : Array Row) (mults : Array Ra
   let residual := computeResidual {} rowLins mults
   unless isLinExprClosed residual do throwError "lp: infeasible Farkas did not cancel"
   let cVal := residual.const
-  unless decide (0 < cVal) do throwError "lp: infeasible residual {cVal} not > 0"
   let (_, ks, C) ← clearMultipliers mults cVal
-  let (sumExpr, sumProof) ← c.buildWeightedSum (← collectEntries rows ks)
+  let (sumExpr, sumProof, sumStrict) ← c.buildWeightedSum (← collectEntries rows ks true)
+  if sumStrict then
+    unless decide (0 ≤ cVal) do throwError "lp: infeasible residual {cVal} not ≥ 0"
+  else
+    unless decide (0 < cVal) do throwError "lp: infeasible residual {cVal} not > 0"
   let identProof ← ({ c.m with atoms }).proveCertificateIdentity vars sumExpr (C : Rat)
-  let hC ← mkDecideProof (c.mkLt (mkIntNum 0) (mkIntNum C))
-  let hFalse := iLemma `scaled_infeasible_close #[sumExpr, mkIntNum C, sumProof, hC, identProof]
+  let CE := mkIntNum C
+  let hFalse ←
+    if sumStrict then
+      let hC ← mkDecideProof (c.mkLe (mkIntNum 0) CE)
+      pure <| iLemma `scaled_infeasible_close_strict #[sumExpr, CE, sumProof, hC, identProof]
+    else
+      let hC ← mkDecideProof (c.mkLt (mkIntNum 0) CE)
+      pure <| iLemma `scaled_infeasible_close #[sumExpr, CE, sumProof, hC, identProof]
   mkAppOptM ``False.elim #[some goalType, some hFalse]
 
 end LP.Tactic.LP.Internal.IntC

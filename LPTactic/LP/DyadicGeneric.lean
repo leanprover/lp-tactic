@@ -44,11 +44,26 @@ theorem scaled_lt_close {L lhs rhs s C : Dyadic}
 theorem scaled_infeasible_close {s C : Dyadic}
     (hSum : s ≤ 0) (hC : 0 < C) (hIdent : s = C) : False := by grind
 
+theorem scaled_lt_close_strict {L lhs rhs s C : Dyadic}
+    (hL : 0 < L) (hSum : s < 0) (hC : 0 ≤ C)
+    (hIdent : L * (rhs - lhs) + s = C) : lhs < rhs := by
+  have h : 0 < L * (rhs - lhs) := by
+    have : L * (rhs - lhs) = C - s := by grind
+    rw [this]; grind
+  have hz := mul_pos_back hL h
+  grind
+
+theorem scaled_infeasible_close_strict {s C : Dyadic}
+    (hSum : s < 0) (hC : 0 ≤ C) (hIdent : s = C) : False := by grind
+
 theorem le_close {lhs rhs s C : Dyadic}
     (hSum : s ≤ 0) (hC : 0 ≤ C) (hIdent : rhs - lhs + s = C) : lhs ≤ rhs := by grind
 
 theorem lt_close {lhs rhs s C : Dyadic}
     (hSum : s ≤ 0) (hC : 0 < C) (hIdent : rhs - lhs + s = C) : lhs < rhs := by grind
+
+theorem lt_close_strict {lhs rhs s C : Dyadic}
+    (hSum : s < 0) (hC : 0 ≤ C) (hIdent : rhs - lhs + s = C) : lhs < rhs := by grind
 
 theorem le_antisymm {a b : Dyadic} (h₁ : a ≤ b) (h₂ : b ≤ a) : a = b := by grind
 
@@ -67,6 +82,12 @@ theorem dyadic_smul_nonpos {a k : Dyadic} (ha : a ≤ 0) (hk : 0 ≤ k) : k * a 
   OrderedRing.mul_nonpos_of_nonneg_of_nonpos hk ha
 
 theorem dyadic_add_nonpos {a b : Dyadic} (ha : a ≤ 0) (hb : b ≤ 0) : a + b ≤ 0 := by grind
+
+theorem dyadic_smul_neg {a k : Dyadic} (ha : a < 0) (hk : 0 < k) : k * a < 0 :=
+  OrderedRing.mul_neg_of_pos_of_neg hk ha
+theorem dyadic_add_neg_nonpos {a b : Dyadic} (ha : a < 0) (hb : b ≤ 0) : a + b < 0 := by grind
+theorem dyadic_add_nonpos_neg {a b : Dyadic} (ha : a ≤ 0) (hb : b < 0) : a + b < 0 := by grind
+theorem dyadic_le_of_lt {a b : Dyadic} (h : a < b) : a ≤ b := by grind
 
 /-! ## Normalizer fixed-arity lemmas (native `Dyadic`). -/
 
