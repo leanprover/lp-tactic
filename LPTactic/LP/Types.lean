@@ -365,6 +365,18 @@ def canonAtom (e : Expr) : MetaM (Option Expr) := do
   if e.hasExprMVar || e.hasLevelMVar || e.hasLooseBVars then return none
   return some e
 
+/-- Look up the LP variable for a canonical atom `a`: first the exact (syntactic) key, then,
+on a miss, an `isDefEq` scan over the registered atoms. The scan lets atoms that are equal up
+to definitional unfolding (`↑n` via different cast paths, `π` behind different reducible
+wrappers, a subterm reconstructed after a `rw`) share one variable, so the hypotheses and the
+goal stay on the same column. Merging only ever unifies *defeq* atoms, so it is sound: the
+certificate identity check remains the authority. -/
+def findDefEqAtom (m : Std.HashMap Expr FVarId) (a : Expr) : MetaM (Option FVarId) := do
+  if let some fv := m[a]? then return some fv
+  for (a', fv) in m do
+    if ← isDefEq a a' then return some fv
+  return none
+
 abbrev ParseM := StateT ParseState MetaM
 
 def addVar (fvarId : FVarId) : ParseM Unit := do
