@@ -25,28 +25,45 @@ partial def hypCarrier? (ty : Expr) : MetaM (Option Expr) := do
   | some α => if ← isCarrierType α then return some α else return none
   | none => return none
 
+/-- Every supported carrier appearing in `ty`, descending through `∧` (so a conjunction
+mixing carriers, e.g. `(0 < n) ∧ ((1 : Rat) < 0)`, contributes ALL of them). Used to find
+the carrier a `False`/`≠` goal's contradiction lives over. -/
+partial def hypCarriers (ty : Expr) : MetaM (Array Expr) := do
+  if let some (l, r) := isAnd? ty then
+    return (← hypCarriers l) ++ (← hypCarriers r)
+  match relCarrier? ty with
+  | some α => if ← isCarrierType α then return #[α] else return #[]
+  | none => return #[]
+
 /-- Discharge a goal that is not `∃`/`∧`/an atomic comparison (paradigmatically
 `False`) by certifying the hypotheses inconsistent. The carrier comes from the
 hypotheses (the goal carries none); the Farkas probe builds the goal via
 `False.elim`. Errors cleanly if no supported-carrier hypothesis is present or the
 hypotheses are consistent. -/
 def solveInconsistent (g : MVarId) (target : Expr) : TacticM Unit := g.withContext do
-  let mut carrier? : Option Expr := none
+  -- Gather EVERY distinct supported carrier present in the hypotheses, not just the first:
+  -- a mixed-carrier context can have a consistent hypothesis over one carrier (e.g. `Int`)
+  -- masking the contradiction that lives over another (e.g. the `Rat` hypotheses plus the
+  -- `a = b` introduced from a `≠` goal). We try each carrier until one is inconsistent.
+  let mut carriers : Array Expr := #[]
   for decl in (← getLCtx) do
-    if carrier?.isNone && !decl.isImplementationDetail then
+    if !decl.isImplementationDetail then
       if ← isProp decl.type then
-        carrier? ← hypCarrier? decl.type
-  let some carrier := carrier?
-    | throwError "lp: goal{indentExpr target}\nis not an atomic comparison or `∃`, and no {
+        for c in ← hypCarriers decl.type do
+          unless ← carriers.anyM (isDefEq c ·) do
+            carriers := carriers.push c
+  if carriers.isEmpty then
+    throwError "lp: goal{indentExpr target}\nis not an atomic comparison or `∃`, and no {
         ""}linear hypothesis over a supported carrier was found to derive it from"
-  let fctx ← mkFrontendCtx carrier
-  let (rows, st) ← (collectHyps).run { carrier, allowAtoms := true }
-  let atoms : AtomTable := { fvarToAtom := st.fvarToAtom, atomToFVar := st.atomToFVar }
-  match ← tryHypsInconsistent fctx rows st.vars target atoms with
-  | some proof => g.assign proof
-  | none =>
-      throwError "lp: goal{indentExpr target}\nis not an atomic comparison, and the {
-        ""}hypotheses over {carrier} are not inconsistent"
+  for carrier in carriers do
+    let fctx ← mkFrontendCtx carrier
+    let (rows, st) ← (collectHyps).run { carrier, allowAtoms := true }
+    let atoms : AtomTable := { fvarToAtom := st.fvarToAtom, atomToFVar := st.atomToFVar }
+    if let some proof ← tryHypsInconsistent fctx rows st.vars target atoms then
+      g.assign proof
+      return
+  throwError "lp: goal{indentExpr target}\nis not an atomic comparison, and the hypotheses {
+      ""}over {carriers.toList} are not inconsistent"
 
 partial def solveGoal (g : MVarId) : TacticM Unit := do
   let (_, g) ← g.intros
