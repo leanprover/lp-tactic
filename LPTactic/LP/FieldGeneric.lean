@@ -35,6 +35,9 @@ theorem sub_nonpos_of_le {a b : α} (h : a ≤ b) : a - b ≤ 0 := by grind
 /-- Strict-hypothesis relaxation: `a < b` used as the weaker `a - b ≤ 0`. -/
 theorem sub_nonpos_of_lt {a b : α} (h : a < b) : a - b ≤ 0 := by grind
 theorem sub_nonpos_of_eq {a b : α} (h : a = b) : a - b ≤ 0 := by grind
+/-- Rewrite `a / c` as `c⁻¹ * a` so the normalizer reuses the scalar-mul path
+(true even at `c = 0`). Args explicit to match `applyLemma`. -/
+theorem div_eq_inv_mul (a b : α) : a / b = b⁻¹ * a := by grind
 theorem lt_of_sub_neg {a b : α} (h : a - b < 0) : a < b := by grind
 theorem le_of_nonneg_sub {a b : α} (h : 0 ≤ b - a) : a ≤ b := by grind
 theorem lt_of_pos_sub {a b : α} (h : 0 < b - a) : a < b := by grind

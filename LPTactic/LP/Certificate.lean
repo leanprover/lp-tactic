@@ -618,6 +618,23 @@ partial def normalizeR (vars : Array FVarId) (e : Expr) :
             return (L, pf, rL)
           else
             throwError "lp(normalize): nonlinear multiplication; one side of `*` must be a reducibly-closed Rat scalar"
+      | .const ``HDiv.hDiv _ =>
+          unless args.size == 6 do
+            throwError "lp(normalize): malformed HDiv in{indentExpr eW}"
+          let dividend := args[4]!
+          let divisor := args[5]!
+          -- `e / c = c⁻¹ * e` (true even at `c = 0`). Recurse through the scalar-mul
+          -- path, which recognises the closed inverse `c⁻¹` as the scalar `1/c`.
+          if let some cVal ← quickScalarLit? divisor then
+            if cVal == 0 then
+              throwError "lp(normalize): division by the zero constant{indentExpr eW}"
+            let invE ← mkAppM ``Inv.inv #[divisor]
+            let mulE ← mkRatMul invE dividend
+            let (L, pInner, rL) ← normalizeR vars mulE
+            let pDiv ← mkAppM ``rat_div_eq_inv_mul #[dividend, divisor]
+            let pf := mkEqTransFast ratType eW mulE rL pDiv pInner
+            return (L, pf, rL)
+          throwError "lp(normalize): division is outside the supported affine grammar{indentExpr eW}"
       | _ =>
           throwError "lp(normalize): unsupported Rat expression{indentExpr eW}"
 
