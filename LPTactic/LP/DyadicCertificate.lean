@@ -100,33 +100,54 @@ def clearMultipliers (mults : Array Rat) (cst : Rat) : MetaM (Int × Array Int �
   unless (pow2Log? cV.den).isSome do throwError "lp(dyadic): residual {cV} not dyadic"
   return (Li, ks, cV)
 
-def collectEntries (rows : Array Row) (ks : Array Int) :
-    MetaM (Array (Int × Expr × Expr)) := do
-  let mut entries : Array (Int × Expr × Expr) := #[]
+def collectEntries (rows : Array Row) (ks : Array Int) (wantStrict : Bool) :
+    MetaM (Array (Int × Expr × Expr × Option Expr)) := do
+  let mut entries : Array (Int × Expr × Expr × Option Expr) := #[]
   for h : i in [0:rows.size] do
     let k := ks[i]!
     if k ≠ 0 then
-      entries := entries.push (k, ← rows[i].term, ← rows[i].proof)
+      let sp? ← if wantStrict && rows[i].strict then pure (some (← rows[i].strictProof))
+                else pure none
+      entries := entries.push (k, ← rows[i].term, ← rows[i].proof, sp?)
   return entries
 
-def DCtx.buildWeightedSum (c : DCtx) (entries : Array (Int × Expr × Expr)) :
-    MetaM (Expr × Expr) := do
+def DCtx.buildWeightedSum (c : DCtx) (entries : Array (Int × Expr × Expr × Option Expr)) :
+    MetaM (Expr × Expr × Bool) := do
   if entries.size = 0 then
-    return (mkDyadicNum 0, dLemma `zero_self_le #[])
-  let mkHead (k : Int) (term hRow : Expr) : MetaM (Expr × Expr) := do
+    return (mkDyadicNum 0, dLemma `zero_self_le #[], false)
+  let mkHead (k : Int) (term hRow : Expr) (sp? : Option Expr) :
+      MetaM (Expr × Expr × Bool) := do
     let kE := mkDyadicNum (k : Rat)
     let head := c.m.mkMul kE term
-    let hk ← mkDecideProof (c.mkLe (mkDyadicNum 0) kE)
-    return (head, dLemma `dyadic_smul_nonpos #[term, kE, hRow, hk])
+    match sp? with
+    | some sp =>
+      let hk ← mkDecideProof (c.mkLt (mkDyadicNum 0) kE)
+      return (head, dLemma `dyadic_smul_neg #[term, kE, sp, hk], true)
+    | none =>
+      let hk ← mkDecideProof (c.mkLe (mkDyadicNum 0) kE)
+      return (head, dLemma `dyadic_smul_nonpos #[term, kE, hRow, hk], false)
   let n := entries.size
-  let (kₖ, termₖ, hRowₖ) := entries[n - 1]!
-  let mut (sumExpr, sumProof) ← mkHead kₖ termₖ hRowₖ
+  let (kₖ, termₖ, hRowₖ, spₖ?) := entries[n - 1]!
+  let (sₖ, pₖ, strictₖ) ← mkHead kₖ termₖ hRowₖ spₖ?
+  let mut sumExpr := sₖ
+  let mut sumProof := pₖ
+  let mut sumStrict := strictₖ
   for i in [0:n-1] do
-    let (k, term, hRow) := entries[n - 2 - i]!
-    let (head, headProof) ← mkHead k term hRow
-    sumProof := dLemma `dyadic_add_nonpos #[head, sumExpr, headProof, sumProof]
+    let (k, term, hRow, sp?) := entries[n - 2 - i]!
+    let (head, headProof, headStrict) ← mkHead k term hRow sp?
+    let (newProof, newStrict) :=
+      if headStrict then
+        let restLe := if sumStrict then dLemma `dyadic_le_of_lt #[sumExpr, mkDyadicNum 0, sumProof]
+                      else sumProof
+        (dLemma `dyadic_add_neg_nonpos #[head, sumExpr, headProof, restLe], true)
+      else if sumStrict then
+        (dLemma `dyadic_add_nonpos_neg #[head, sumExpr, headProof, sumProof], true)
+      else
+        (dLemma `dyadic_add_nonpos #[head, sumExpr, headProof, sumProof], false)
     sumExpr := c.m.mkAdd head sumExpr
-  return (sumExpr, sumProof)
+    sumProof := newProof
+    sumStrict := newStrict
+  return (sumExpr, sumProof, sumStrict)
 
 def DCtx.assembleLeProof (c : DCtx) (rows : Array Row) (strict : Bool)
     (objLin : LinExpr) (mults : Array Rat) (vars : Array FVarId) (lhs rhs : Expr) (atoms : AtomTable := {}) :
@@ -136,19 +157,27 @@ def DCtx.assembleLeProof (c : DCtx) (rows : Array Row) (strict : Bool)
   unless isLinExprClosed residual do
     throwError "lp: dual certificate did not algebraically cancel the goal"
   let cVal := residual.const
-  if strict then
-    unless decide (0 < cVal) do throwError "lp: goal not entailed; residual {cVal} not > 0"
-  else
-    unless decide (0 ≤ cVal) do throwError "lp: goal not entailed; residual {cVal} not ≥ 0"
   let (Li, ks, C) ← clearMultipliers mults cVal
   let CE := mkDyadicNum C
-  let (sumExpr, sumProof) ← c.buildWeightedSum (← collectEntries rows ks)
+  let (sumExpr, sumProof, sumStrict) ← c.buildWeightedSum (← collectEntries rows ks strict)
+  if strict then
+    if sumStrict then
+      unless decide (0 ≤ cVal) do throwError "lp: goal not entailed; residual {cVal} not ≥ 0"
+    else
+      unless decide (0 < cVal) do throwError "lp: goal not entailed; residual {cVal} not > 0 {
+        ""}(no strict hypothesis available to upgrade it)"
+  else
+    unless decide (0 ≤ cVal) do throwError "lp: goal not entailed; residual {cVal} not ≥ 0"
   if Li == 1 then
     let lhsId := c.m.mkAdd (c.m.mkSub rhs lhs) sumExpr
     let identProof ← ({ c.m with atoms }).proveCertificateIdentity vars lhsId C
     if strict then
-      let hC ← mkDecideProof (c.mkLt (mkDyadicNum 0) CE)
-      return dLemma `lt_close #[lhs, rhs, sumExpr, CE, sumProof, hC, identProof]
+      if sumStrict then
+        let hC ← mkDecideProof (c.mkLe (mkDyadicNum 0) CE)
+        return dLemma `lt_close_strict #[lhs, rhs, sumExpr, CE, sumProof, hC, identProof]
+      else
+        let hC ← mkDecideProof (c.mkLt (mkDyadicNum 0) CE)
+        return dLemma `lt_close #[lhs, rhs, sumExpr, CE, sumProof, hC, identProof]
     else
       let hC ← mkDecideProof (c.mkLe (mkDyadicNum 0) CE)
       return dLemma `le_close #[lhs, rhs, sumExpr, CE, sumProof, hC, identProof]
@@ -157,8 +186,12 @@ def DCtx.assembleLeProof (c : DCtx) (rows : Array Row) (strict : Bool)
   let identProof ← ({ c.m with atoms }).proveCertificateIdentity vars lhsId C
   let hL ← mkDecideProof (c.mkLt (mkDyadicNum 0) LE)
   if strict then
-    let hC ← mkDecideProof (c.mkLt (mkDyadicNum 0) CE)
-    return dLemma `scaled_lt_close #[LE, lhs, rhs, sumExpr, CE, hL, sumProof, hC, identProof]
+    if sumStrict then
+      let hC ← mkDecideProof (c.mkLe (mkDyadicNum 0) CE)
+      return dLemma `scaled_lt_close_strict #[LE, lhs, rhs, sumExpr, CE, hL, sumProof, hC, identProof]
+    else
+      let hC ← mkDecideProof (c.mkLt (mkDyadicNum 0) CE)
+      return dLemma `scaled_lt_close #[LE, lhs, rhs, sumExpr, CE, hL, sumProof, hC, identProof]
   else
     let hC ← mkDecideProof (c.mkLe (mkDyadicNum 0) CE)
     return dLemma `scaled_le_close #[LE, lhs, rhs, sumExpr, CE, hL, sumProof, hC, identProof]
@@ -169,12 +202,21 @@ def DCtx.assembleInfeasibleProof (c : DCtx) (rows : Array Row) (mults : Array Ra
   let residual := computeResidual {} rowLins mults
   unless isLinExprClosed residual do throwError "lp: infeasible Farkas did not cancel"
   let cVal := residual.const
-  unless decide (0 < cVal) do throwError "lp: infeasible residual {cVal} not > 0"
   let (_, ks, C) ← clearMultipliers mults cVal
-  let (sumExpr, sumProof) ← c.buildWeightedSum (← collectEntries rows ks)
+  let (sumExpr, sumProof, sumStrict) ← c.buildWeightedSum (← collectEntries rows ks true)
+  if sumStrict then
+    unless decide (0 ≤ cVal) do throwError "lp: infeasible residual {cVal} not ≥ 0"
+  else
+    unless decide (0 < cVal) do throwError "lp: infeasible residual {cVal} not > 0"
   let identProof ← ({ c.m with atoms }).proveCertificateIdentity vars sumExpr C
-  let hC ← mkDecideProof (c.mkLt (mkDyadicNum 0) (mkDyadicNum C))
-  let hFalse := dLemma `scaled_infeasible_close #[sumExpr, mkDyadicNum C, sumProof, hC, identProof]
+  let CE := mkDyadicNum C
+  let hFalse ←
+    if sumStrict then
+      let hC ← mkDecideProof (c.mkLe (mkDyadicNum 0) CE)
+      pure <| dLemma `scaled_infeasible_close_strict #[sumExpr, CE, sumProof, hC, identProof]
+    else
+      let hC ← mkDecideProof (c.mkLt (mkDyadicNum 0) CE)
+      pure <| dLemma `scaled_infeasible_close #[sumExpr, CE, sumProof, hC, identProof]
   mkAppOptM ``False.elim #[some goalType, some hFalse]
 
 end LP.Tactic.LP.Internal.DyadicC

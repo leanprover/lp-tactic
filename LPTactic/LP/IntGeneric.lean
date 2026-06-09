@@ -49,6 +49,18 @@ theorem scaled_lt_close {L lhs rhs s C : Int}
 theorem scaled_infeasible_close {s C : Int}
     (hSum : s ≤ 0) (hC : 0 < C) (hIdent : s = C) : False := by omega
 
+/-- Strict-row closers: a strictly negative weighted sum (`s < 0`, from a strict row carrying
+a positive multiplier) proves the strict goal / contradiction even at residual `0 ≤ C`. -/
+theorem scaled_lt_close_strict {L lhs rhs s C : Int}
+    (hL : 0 < L) (hSum : s < 0) (hC : 0 ≤ C)
+    (hIdent : L * (rhs - lhs) + s = C) : lhs < rhs := by
+  have h : 0 < L * (rhs - lhs) := by omega
+  have := mul_pos_back hL h
+  omega
+
+theorem scaled_infeasible_close_strict {s C : Int}
+    (hSum : s < 0) (hC : 0 ≤ C) (hIdent : s = C) : False := by omega
+
 /-- Unscaled closers for the common `L = 1` case (integer multipliers): no `L *` factor,
 so the normalizer skips a whole `proveSmul` pass over the objective. -/
 theorem le_close {lhs rhs s C : Int}
@@ -56,6 +68,9 @@ theorem le_close {lhs rhs s C : Int}
 
 theorem lt_close {lhs rhs s C : Int}
     (hSum : s ≤ 0) (hC : 0 < C) (hIdent : rhs - lhs + s = C) : lhs < rhs := by omega
+
+theorem lt_close_strict {lhs rhs s C : Int}
+    (hSum : s < 0) (hC : 0 ≤ C) (hIdent : rhs - lhs + s = C) : lhs < rhs := by omega
 
 theorem le_antisymm {a b : Int} (h₁ : a ≤ b) (h₂ : b ≤ a) : a = b := by omega
 
@@ -76,6 +91,12 @@ theorem int_smul_nonpos {a k : Int} (ha : a ≤ 0) (hk : 0 ≤ k) : k * a ≤ 0 
   Int.mul_nonpos_of_nonneg_of_nonpos hk ha
 
 theorem int_add_nonpos {a b : Int} (ha : a ≤ 0) (hb : b ≤ 0) : a + b ≤ 0 := by omega
+
+theorem int_smul_neg {a k : Int} (ha : a < 0) (hk : 0 < k) : k * a < 0 :=
+  Int.mul_neg_of_pos_of_neg hk ha
+theorem int_add_neg_nonpos {a b : Int} (ha : a < 0) (hb : b ≤ 0) : a + b < 0 := by omega
+theorem int_add_nonpos_neg {a b : Int} (ha : a ≤ 0) (hb : b < 0) : a + b < 0 := by omega
+theorem int_le_of_lt {a b : Int} (h : a < b) : a ≤ b := by omega
 
 /-! ## Normalizer fixed-arity lemmas (native `Int`, exact copies of `Types.lean`'s Rat
 shapes). Coefficient arithmetic happens host-side; the `hm`/`e` hypotheses are discharged
