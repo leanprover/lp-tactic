@@ -145,6 +145,37 @@ def natNonnegRows (vars : Array FVarId) (atoms : AtomTable) : MetaM (Array Row) 
       expr := { coeffs := #[(v, -1)] }
       lhsExpr := zeroE, rhsExpr := xE, leProof := pure leProof }
 
+/-- For a ring carrier (`ℝ`/`ℤ`/`Rat`/`Dyadic`), an opaque atom that is a `Nat`-cast `↑n`
+is `≥ 0`. linarith gets this from its ℕ→ℤ cast preprocessing; lp's columns are free, so we
+add an explicit `0 ≤ ↑n` row per such atom — otherwise a goal bounded only by `↑n ≥ 0` is
+spuriously unbounded. `mkNonneg R n` builds the carrier's `0 ≤ (↑n : R)` proof (e.g.
+`Int.natCast_nonneg`, `OrderedRing.natCast_nonneg`); `subNonposName` is the carrier's
+`a ≤ b → a - b ≤ 0` lemma (`IntC`/`DyadicC`/`Field`). -/
+def castNonnegRows (vars : Array FVarId) (atoms : AtomTable)
+    (subNonposName : Name) (mkNonneg : Expr → MetaM Expr) : MetaM (Array Row) := do
+  let mut out : Array Row := #[]
+  for v in vars do
+    let e := atoms.keyToExpr v
+    -- Match `↑n` for `n : ℕ`: `@Nat.cast R _ n` (or its `NatCast.natCast` unfolding).
+    if e.isAppOfArity ``Nat.cast 3 || e.isAppOfArity ``NatCast.natCast 3 then
+      -- Best-effort: if the carrier's nonneg lemma / instance can't be built for this atom,
+      -- skip it (no row) rather than failing the whole goal — soundness is unaffected.
+      try
+        let leProof ← mkNonneg e
+        -- The `0 ≤ ↑n` from `mkNonneg`; take its exact `0` and `↑n` so the row, the
+        -- `subNonposName` application, and the certificate identity all agree syntactically.
+        let leArgs := (← inferType leProof).getAppArgs
+        let zeroE := leArgs[2]!
+        let castE := leArgs[3]!
+        let term ← mkAppM ``HSub.hSub #[zeroE, castE]
+        let proof ← mkAppM subNonposName #[leProof]
+        out := out.push {
+          term := pure term, proof := pure proof,
+          expr := { coeffs := #[(v, -1)] },
+          lhsExpr := zeroE, rhsExpr := castE }
+      catch _ => pure ()
+  return out
+
 def proveEntailed (rows : Array Row) (strict : Bool)
     (vars : Array FVarId) (lhs rhs : Expr) (atoms : AtomTable := {}) : TacticM Expr := do
   -- Objective: `rhs - lhs` as a `LinExpr`. Parse against the goal's carrier
@@ -194,8 +225,38 @@ def proveEntailed (rows : Array Row) (strict : Bool)
     if isNat then pure (some (← NatC.mkNCtx)) else pure none
   -- ℕ nonnegativity: add a `0 ≤ x` row per variable for the `Nat` carrier (lp's columns are
   -- free, but ℕ values are `≥ 0`), so goals like `0 ≤ n` or `n ≤ n + m` aren't spuriously
-  -- reported unbounded. No-op for other carriers.
-  let rows ← if isNat then pure (rows ++ (← natNonnegRows vars atoms)) else pure rows
+  -- reported unbounded. For ring carriers, the analogous `0 ≤ ↑n` rows for `Nat`-cast atoms.
+  let rows ←
+    if isNat then pure (rows ++ (← natNonnegRows vars atoms))
+    else if isRat then pure rows  -- the Rat fast-path normalizer doesn't yet thread cast
+                                  -- atoms through the certificate identity; ℝ uses the CCtx path.
+    else
+      let subNonposName :=
+        if isInt then ``IntC.sub_nonpos_of_le
+        else if isDyadic then ``DyadicC.sub_nonpos_of_le
+        else ``Field.sub_nonpos_of_le
+      -- Build `0 ≤ (↑n : R)` for a cast atom `e = @Nat.cast R _ n`. `Int` has a core
+      -- `Int.natCast_nonneg`; other ordered-ring carriers (`ℝ`, `Rat`, …) use the `Grind`
+      -- `OrderedRing.natCast_nonneg` — we pin only `R` and unify the result against `e`,
+      -- so the (variable) instance arity and the atom's own `NatCast` instance both match.
+      let mkNonneg (e : Expr) : MetaM Expr := do
+        let args := e.getAppArgs
+        let R := args[0]!; let n := args[2]!
+        if isInt then
+          return ← mkAppM ``Int.natCast_nonneg #[n]
+        -- Fully apply `natCast_nonneg` (carrier `R`, its instances inferred, cast `n`), then
+        -- confirm by defeq that it proves `0 ≤ e` for the atom's own `NatCast` instance. We
+        -- build the expected type so we never inspect a partially-applied (`∀`) proof term.
+        let zeroR ← mkAppOptM ``OfNat.ofNat #[some R, some (mkNatLit 0), none]
+        let want ← mkAppM ``LE.le #[zeroR, e]
+        let proof ← mkAppOptM ``Lean.Grind.OrderedRing.natCast_nonneg
+          (#[some R] ++ Array.replicate 6 none ++ #[some n])
+        unless ← isDefEq (← inferType proof) want do
+          throwError "lp: cast-nonneg lemma did not match the atom"
+        -- Pin the type to `0 ≤ e` (the atom's own cast instance), so the caller reads back
+        -- the atom verbatim and the certificate identity stays consistent.
+        mkExpectedTypeHint (← instantiateMVars proof) want
+      pure (rows ++ (← castNonnegRows vars atoms subNonposName mkNonneg))
   let assembleOptimal (mults : Array Rat) : TacticM Expr :=
     match nctx?, ictx?, dctx?, cctx? with
     | some nc, _, _, _ => nc.assembleLeProof rows strict objLin mults vars lhs rhs
