@@ -304,7 +304,36 @@ def proveEntailed (rows : Array Row) (strict : Bool)
   let rowLins := rows.map (·.expr)
   match sol.status with
   | .optimal =>
-      assembleOptimal mults
+      try
+        assembleOptimal mults
+      catch e =>
+        -- Strict goal whose LP dual didn't put a positive multiplier on a strict row, so the
+        -- residual upgrade couldn't fire. `lhs < rhs` is exactly the strict-infeasibility of
+        -- `{rows, rhs ≤ lhs}`: re-solve with the strict-margin probe on the augmented system
+        -- (the negation `rhs - lhs ≤ 0` is the objective row `objLin`), then normalize the dual
+        -- so that negation row's multiplier is 1 and retry the (re-validated) assembly.
+        if strict && rows.any (·.strict) then
+          let rowDense' := rowDense.push objCoeffs
+          let rowConsts' := rowConsts.push objConst
+          let strictFlags' := (rows.map (·.strict)).push false
+          have hSize' : rowDense'.size = rowConsts'.size := by
+            simp [rowDense', rowConsts', hSize]
+          let pS := buildStrictProblem rowDense' rowConsts' strictFlags' vars.size hSize'
+          let optsS : Options := { ({} : Options) with sense := .maximize, presolve := false }
+          let some normS := (validate pS).toOption | throw e
+          let some solS := (← LP.dispatchSolveExact optsS normS (← getBackendOverride)).toOption
+            | throw e
+          match solS.status, solS.certificate.dual with
+          | .optimal, some dS =>
+              let multsAll := dS.rowUpper.toArray
+              let lamNeg := multsAll[rows.size]!
+              unless 0 < lamNeg do throw e
+              -- Scale-invariant: divide by the negation row's multiplier to pin it at 1.
+              let newMults := (multsAll.extract 0 rows.size).map (· / lamNeg)
+              unless newMults.all (0 ≤ ·) do throw e
+              assembleOptimal newMults
+          | _, _ => throw e
+        else throw e
   | .infeasible =>
       let goalType ←
         if strict then mkAppM ``LT.lt #[lhs, rhs] else mkAppM ``LE.le #[lhs, rhs]
