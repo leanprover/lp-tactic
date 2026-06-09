@@ -32,6 +32,8 @@ variable {α : Type u}
 
 theorem le_of_sub_nonpos {a b : α} (h : a - b ≤ 0) : a ≤ b := by grind
 theorem sub_nonpos_of_le {a b : α} (h : a ≤ b) : a - b ≤ 0 := by grind
+/-- Strict-hypothesis relaxation: `a < b` used as the weaker `a - b ≤ 0`. -/
+theorem sub_nonpos_of_lt {a b : α} (h : a < b) : a - b ≤ 0 := by grind
 theorem sub_nonpos_of_eq {a b : α} (h : a = b) : a - b ≤ 0 := by grind
 theorem lt_of_sub_neg {a b : α} (h : a - b < 0) : a < b := by grind
 theorem le_of_nonneg_sub {a b : α} (h : 0 ≤ b - a) : a ≤ b := by grind

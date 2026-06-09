@@ -321,8 +321,22 @@ partial def collectHypProof (origin : Name) (proof : Expr) :
     return (← collectHypProof origin left) ++ (← collectHypProof origin right)
   match ← parseAtomic? type with
   | none => return #[]
-  | some (.lt, _, _, _, _) =>
-      throwError "lp: strict hypothesis `{origin}` is not supported"
+  | some (.lt, lhsExpr, rhsExpr, lhs, rhs) =>
+      -- Cheap strict relaxation: use a strict hypothesis `a < b` as the weaker
+      -- `a - b ≤ 0` (sound). This lets lp *use* strict hypotheses wherever
+      -- non-strictness suffices. It does NOT recover the strictness itself
+      -- (e.g. `a < b, b ≤ a ⊢ False`) and cannot prove strict *goals*; that needs
+      -- a strict-aware Farkas certificate (tracked upstream). The `leProof`
+      -- (`Nat.le_of_lt`) is only forced by the `Nat` no-subtraction assembly.
+      let row := lhs.sub rhs
+      let ltName ← carrierSubNonposName ``IntC.sub_nonpos_of_lt ``DyadicC.sub_nonpos_of_lt
+        ``Field.sub_nonpos_of_lt
+      return #[{
+        term := mkAppM ``HSub.hSub #[lhsExpr, rhsExpr],
+        expr := row,
+        proof := mkAppM ltName #[proof],
+        lhsExpr := lhsExpr, rhsExpr := rhsExpr,
+        leProof := mkAppM ``Nat.le_of_lt #[proof] }]
   | some (.le, lhsExpr, rhsExpr, lhs, rhs) =>
       let row := lhs.sub rhs
       -- Row closure: `Int` needs native `IntC.*` lemmas (`Field.*` requires a `Field`
