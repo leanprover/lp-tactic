@@ -141,6 +141,12 @@ partial def CCtx.proveLitEq (c : CCtx) (e : Expr) (r : Rat) : MetaM Expr := do
     return ← binArith ``Lean.Grind.Field.NormNum.mul_eq (· * ·) args[4]! args[5]!
   if fn.isConstOf ``HDiv.hDiv && args.size == 6 then
     return ← binArith ``Lean.Grind.Field.NormNum.div_eq (· / ·) args[4]! args[5]!
+  -- A reducibly-wrapped literal (a `@[reducible]` abbrev, a cast) that `quickScalarLit?`
+  -- accepted after `whnf`: unfold and prove for the bare literal, then transport by defeq
+  -- back to the wrapper's `Eq` (`e` is reducibly equal to its unfolding).
+  let eU ← withReducible <| whnfR e
+  if eU != e then
+    return ← mkExpectedTypeHint (← c.proveLitEq eU r) (← mkEq e (c.mkLit r))
   throwError "lp(field): unrecognized numeral literal{indentExpr e}"
 
 /-! ## `CarrierMethods` instance for the unified normalizer. -/
