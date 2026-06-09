@@ -207,7 +207,8 @@ def collectEntries (rows : Array Row) (mults : Array Rat) :
 
 /-- Optimal-branch certificate: `Σ λᵢ·rowᵢ ≤ 0` + `(rhs-lhs)+s = c` ⇒ `lhs ≤ rhs` (or `<`). -/
 def CCtx.assembleLeProof (c : CCtx) (rows : Array Row) (strict : Bool)
-    (objLin : LinExpr) (mults : Array Rat) (vars : Array FVarId) (lhs rhs : Expr) :
+    (objLin : LinExpr) (mults : Array Rat) (vars : Array FVarId) (lhs rhs : Expr)
+    (atoms : AtomTable := {}) :
     MetaM Expr := do
   let rowLins := rows.map (·.expr)
   let residual := computeResidual objLin rowLins mults
@@ -220,7 +221,7 @@ def CCtx.assembleLeProof (c : CCtx) (rows : Array Row) (strict : Bool)
     unless decide (0 ≤ cVal) do throwError "lp: goal not entailed; residual {cVal} not ≥ 0"
   let (sumExpr, sumProof) ← c.buildWeightedSum (← collectEntries rows mults)
   let lhsId := c.mkAdd (c.mkSub rhs lhs) sumExpr
-  let identProof ← c.toMethods.proveCertificateIdentity vars lhsId cVal
+  let identProof ← ({ c.toMethods with atoms }).proveCertificateIdentity vars lhsId cVal
   if strict then
     mkAppM ``Field.direct_lt_close #[sumProof, ← c.mkLitPos cVal, identProof]
   else
@@ -228,14 +229,14 @@ def CCtx.assembleLeProof (c : CCtx) (rows : Array Row) (strict : Bool)
 
 /-- Infeasible-branch (Farkas) certificate. -/
 def CCtx.assembleInfeasibleProof (c : CCtx) (rows : Array Row) (mults : Array Rat)
-    (vars : Array FVarId) (goalType : Expr) : MetaM Expr := do
+    (vars : Array FVarId) (goalType : Expr) (atoms : AtomTable := {}) : MetaM Expr := do
   let rowLins := rows.map (·.expr)
   let residual := computeResidual {} rowLins mults
   unless isLinExprClosed residual do throwError "lp: infeasible Farkas certificate did not cancel"
   let cVal := residual.const
   unless decide (0 < cVal) do throwError "lp: infeasible residual {cVal} not > 0"
   let (sumExpr, sumProof) ← c.buildWeightedSum (← collectEntries rows mults)
-  let identProof ← c.toMethods.proveCertificateIdentity vars sumExpr cVal
+  let identProof ← ({ c.toMethods with atoms }).proveCertificateIdentity vars sumExpr cVal
   let hFalse ← mkAppM ``Field.direct_infeasible_close #[sumProof, ← c.mkLitPos cVal, identProof]
   mkAppOptM ``False.elim #[some goalType, some hFalse]
 

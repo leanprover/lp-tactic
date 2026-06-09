@@ -149,12 +149,12 @@ structure FrontendCtx where
   mkNumeral : Rat → MetaM Expr
   /-- Prove `goalType` from inconsistent `rows` weighted by nonneg Farkas `mults`
   (zero objective), via `False.elim`. -/
-  mkContradiction : Array Row → Array Rat → Array FVarId → Expr → MetaM Expr
+  mkContradiction : Array Row → Array Rat → Array FVarId → Expr → AtomTable → MetaM Expr
 
 /-- The `Rat` Farkas-contradiction path (`Q`-literal discharger), kept off the `ofRat`
 field bridge so `∃`/`maximize` over `Rat` does not regress. -/
 def ratHypsContradiction (rows : Array Row) (mults : Array Rat) (vars : Array FVarId)
-    (goalType : Expr) : MetaM Expr := do
+    (goalType : Expr) (atoms : AtomTable := {}) : MetaM Expr := do
   let rowLins := rows.map (·.expr)
   let residual := computeResidual {} rowLins mults
   unless isLinExprClosed residual do throwError "lp: Farkas certificate did not cancel"
@@ -164,7 +164,7 @@ def ratHypsContradiction (rows : Array Row) (mults : Array Rat) (vars : Array FV
     let lam := mults[i]!
     if lam ≠ 0 then entries := entries.push (lam, ← rows[i].term, ← rows[i].proof)
   let (sumExpr, sumProof) ← buildWeightedSumAndProof entries
-  let identProof ← proveCertificateIdentity vars sumExpr cval
+  let identProof ← proveCertificateIdentity vars sumExpr cval atoms
   let cExpr ← mkRatLit cval
   let hC ← mkDecideProof (← mkAppM ``LT.lt #[(← mkRatLit 0), cExpr])
   let hFalse := mkAppN (mkConst ``direct_infeasible_close)
@@ -183,7 +183,7 @@ def mkFrontendCtx (carrier : Expr) : MetaM FrontendCtx := do
           throwError "lp: `∃`/`maximize` over `Int` needs an integer value, but the {
             ""}LP gave {v}; integrality is `omega`/`cutsat`'s job, not `lp`'s ℚ-Farkas"
         pure (IntC.mkIntNum v.num)
-      mkContradiction := fun rows mults vars gt => ic.assembleInfeasibleProof rows mults vars gt }
+      mkContradiction := fun rows mults vars gt atoms => ic.assembleInfeasibleProof rows mults vars gt atoms }
   else if ← isDefEq carrier (mkConst ``Dyadic) then
     let dc ← DyadicC.mkDCtx
     return {
@@ -193,7 +193,7 @@ def mkFrontendCtx (carrier : Expr) : MetaM FrontendCtx := do
           throwError "lp: `∃`/`maximize` over `Dyadic` needs a dyadic value (denominator {
             ""}a power of two), but the LP gave {v}"
         pure (DyadicC.mkDyadicNum v)
-      mkContradiction := fun rows mults vars gt => dc.assembleInfeasibleProof rows mults vars gt }
+      mkContradiction := fun rows mults vars gt atoms => dc.assembleInfeasibleProof rows mults vars gt atoms }
   else if ← isDefEq carrier (mkConst ``Nat) then
     let nc ← NatC.mkNCtx
     return {
@@ -203,16 +203,16 @@ def mkFrontendCtx (carrier : Expr) : MetaM FrontendCtx := do
           throwError "lp: `∃`/`maximize` over `Nat` needs a nonneg integer value, but the {
             ""}LP gave {v}; integrality is `omega`/`cutsat`'s job, not `lp`'s ℚ-Farkas"
         pure (NatC.mkNatNum v)
-      mkContradiction := fun rows mults vars gt => nc.assembleInfeasibleProof rows mults vars gt }
+      mkContradiction := fun rows mults vars gt _atoms => nc.assembleInfeasibleProof rows mults vars gt }
   else
     let cc ← Field.mkCCtx carrier
     let isRat ← isDefEq carrier ratType
     return {
       carrier := carrier
       mkNumeral := cc.mkRatNumeral
-      mkContradiction := fun rows mults vars gt =>
-        if isRat then ratHypsContradiction rows mults vars gt
-        else cc.assembleInfeasibleProof rows mults vars gt }
+      mkContradiction := fun rows mults vars gt atoms =>
+        if isRat then ratHypsContradiction rows mults vars gt atoms
+        else cc.assembleInfeasibleProof rows mults vars gt atoms }
 
 /-- Try to certify that the outer hypotheses `rows` (over `vars`) are inconsistent,
 producing a proof of `goalType` (via `False.elim`) on success, or `none` if the probe
@@ -222,7 +222,7 @@ This is the existential-path inconsistency-probe fallback: a fixed constant-zero
 objective (`max 0 subject to H`) so we probe only the consistency of `H`; the carrier's
 `mkContradiction` builds the `goalType` proof from the Farkas dual. -/
 def tryHypsInconsistent (fctx : FrontendCtx) (rows : Array Row) (vars : Array FVarId)
-    (goalType : Expr) : MetaM (Option Expr) := do
+    (goalType : Expr) (atoms : AtomTable := {}) : MetaM (Option Expr) := do
   if rows.size = 0 then return none
   -- Zero-variable special case: every row is a closed `c ≤ 0` fact. A row with
   -- `const > 0` is *itself* `False`; certify it with multiplier 1 on that row.
@@ -231,7 +231,7 @@ def tryHypsInconsistent (fctx : FrontendCtx) (rows : Array Row) (vars : Array FV
     for h : i in [0:rows.size] do
       if isLinExprClosed rows[i].expr && decide (0 < rows[i].expr.const) then
         let mults := (Array.replicate rows.size (0 : Rat)).set! i 1
-        return some (← fctx.mkContradiction rows mults vars goalType)
+        return some (← fctx.mkContradiction rows mults vars goalType atoms)
     return none
   let rowDense := rows.map (·.expr.toDense vars)
   let rowConsts := rows.map (·.expr.const)
@@ -256,7 +256,7 @@ def tryHypsInconsistent (fctx : FrontendCtx) (rows : Array Row) (vars : Array FV
       let residual := computeResidual {} (rows.map (·.expr)) mults
       unless isLinExprClosed residual do return none
       unless decide (0 < residual.const) do return none
-      return some (← fctx.mkContradiction rows mults vars goalType)
+      return some (← fctx.mkContradiction rows mults vars goalType atoms)
   | _ => return none
 
 /-- Apply `Exists.intro` with the given witness to `g`, returning the

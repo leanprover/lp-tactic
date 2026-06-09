@@ -123,7 +123,7 @@ def ICtx.buildWeightedSum (c : ICtx) (entries : Array (Int × Expr × Expr)) :
 /-- Optimal-branch certificate over `Int`. L=1 (the common integer-multiplier case): no goal
 scaling, unscaled closer. L>1: scaled identity + scaled closer. -/
 def ICtx.assembleLeProof (c : ICtx) (rows : Array Row) (strict : Bool)
-    (objLin : LinExpr) (mults : Array Rat) (vars : Array FVarId) (lhs rhs : Expr) :
+    (objLin : LinExpr) (mults : Array Rat) (vars : Array FVarId) (lhs rhs : Expr) (atoms : AtomTable := {}) :
     MetaM Expr := do
   let rowLins := rows.map (·.expr)
   let residual := computeResidual objLin rowLins mults
@@ -139,7 +139,7 @@ def ICtx.assembleLeProof (c : ICtx) (rows : Array Row) (strict : Bool)
   let (sumExpr, sumProof) ← c.buildWeightedSum (← collectEntries rows ks)
   if Li == 1 then
     let lhsId := c.m.mkAdd (c.m.mkSub rhs lhs) sumExpr
-    let identProof ← c.m.proveCertificateIdentity vars lhsId (C : Rat)
+    let identProof ← ({ c.m with atoms }).proveCertificateIdentity vars lhsId (C : Rat)
     if strict then
       let hC ← mkDecideProof (c.mkLt (mkIntNum 0) CE)
       return iLemma `lt_close #[lhs, rhs, sumExpr, CE, sumProof, hC, identProof]
@@ -148,7 +148,7 @@ def ICtx.assembleLeProof (c : ICtx) (rows : Array Row) (strict : Bool)
       return iLemma `le_close #[lhs, rhs, sumExpr, CE, sumProof, hC, identProof]
   let LE := mkIntNum Li
   let lhsId := c.m.mkAdd (c.m.mkMul LE (c.m.mkSub rhs lhs)) sumExpr
-  let identProof ← c.m.proveCertificateIdentity vars lhsId (C : Rat)
+  let identProof ← ({ c.m with atoms }).proveCertificateIdentity vars lhsId (C : Rat)
   let hL ← mkDecideProof (c.mkLt (mkIntNum 0) LE)
   if strict then
     let hC ← mkDecideProof (c.mkLt (mkIntNum 0) CE)
@@ -159,7 +159,7 @@ def ICtx.assembleLeProof (c : ICtx) (rows : Array Row) (strict : Bool)
 
 /-- Infeasible-branch (Farkas) certificate over `Int`. -/
 def ICtx.assembleInfeasibleProof (c : ICtx) (rows : Array Row) (mults : Array Rat)
-    (vars : Array FVarId) (goalType : Expr) : MetaM Expr := do
+    (vars : Array FVarId) (goalType : Expr) (atoms : AtomTable := {}) : MetaM Expr := do
   let rowLins := rows.map (·.expr)
   let residual := computeResidual {} rowLins mults
   unless isLinExprClosed residual do throwError "lp: infeasible Farkas did not cancel"
@@ -167,7 +167,7 @@ def ICtx.assembleInfeasibleProof (c : ICtx) (rows : Array Row) (mults : Array Ra
   unless decide (0 < cVal) do throwError "lp: infeasible residual {cVal} not > 0"
   let (_, ks, C) ← clearMultipliers mults cVal
   let (sumExpr, sumProof) ← c.buildWeightedSum (← collectEntries rows ks)
-  let identProof ← c.m.proveCertificateIdentity vars sumExpr (C : Rat)
+  let identProof ← ({ c.m with atoms }).proveCertificateIdentity vars sumExpr (C : Rat)
   let hC ← mkDecideProof (c.mkLt (mkIntNum 0) (mkIntNum C))
   let hFalse := iLemma `scaled_infeasible_close #[sumExpr, mkIntNum C, sumProof, hC, identProof]
   mkAppOptM ``False.elim #[some goalType, some hFalse]
