@@ -72,10 +72,10 @@ partial def solveGoal (g : MVarId) : TacticM Unit := do
     specific backend by name for this call only, overriding any
     ambient `set_option lp.backend` and the registry's
     priority-based default. -/
-syntax (name := lpTactic) "lp" (" (" &"backend" " := " ident ")")? : tactic
+syntax (name := lpTactic) "lp" (" (" &"backend" " := " ident ")")? (&" only")? (" [" term,* "]")? : tactic
 
 elab_rules : tactic
-  | `(tactic| lp $[(backend := $b:ident)]?) => do
+  | `(tactic| lp $[(backend := $b:ident)]? $[only%$_o]? $[[$args,*]]?) => do
     let backendOverride? : Option String := b.map (·.getId.toString)
     let withBackend (act : TacticM Unit) : TacticM Unit :=
       match backendOverride? with
@@ -84,11 +84,23 @@ elab_rules : tactic
           { ctx with options :=
               LP.Tactic.LP.lp.backend.set ctx.options name }) act
       | none => act
+    -- Extra facts `lp [t₁, …]`: elaborate each and add it as a local hypothesis, so
+    -- `collectHyps` uses it (matches `linarith [..]`). `only` is accepted but ignored —
+    -- lp also reads the local context, which is sound (extra hypotheses cannot mislead it).
+    let argTerms : Array Term := (args.map (·.getElems)).getD #[]
     withBackend do
       let goals ← getGoals
       match goals with
       | [] => throwError "lp: no goals"
       | g :: rest =>
+          let g ← g.withContext do
+            let mut g := g
+            for t in argTerms do
+              let p ← Term.elabTermAndSynthesize t none
+              let ty ← inferType (← instantiateMVars p)
+              let (_, g') ← (← g.assert (← mkFreshUserName `lpArg) ty p).intro1P
+              g := g'
+            pure g
           setGoals [g]
           solveGoal g
           let newGoals ← getGoals
