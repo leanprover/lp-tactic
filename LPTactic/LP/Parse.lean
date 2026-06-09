@@ -367,21 +367,24 @@ partial def collectHypProof (origin : Name) (proof : Expr) :
   match ← parseAtomic? type with
   | none => return #[]
   | some (.lt, lhsExpr, rhsExpr, lhs, rhs) =>
-      -- Cheap strict relaxation: use a strict hypothesis `a < b` as the weaker
-      -- `a - b ≤ 0` (sound). This lets lp *use* strict hypotheses wherever
-      -- non-strictness suffices. It does NOT recover the strictness itself
-      -- (e.g. `a < b, b ≤ a ⊢ False`) and cannot prove strict *goals*; that needs
-      -- a strict-aware Farkas certificate (tracked upstream). The `leProof`
-      -- (`Nat.le_of_lt`) is only forced by the `Nat` no-subtraction assembly.
+      -- Strict hypothesis `a < b`. We keep BOTH the relaxed `a - b ≤ 0` (`proof`, used by
+      -- the LP and by combinations where non-strictness suffices) AND the strict `a - b < 0`
+      -- (`strictProof`), tagging the row `strict`. A positive multiplier on a strict row then
+      -- upgrades the Farkas sum from `≤ 0` to `< 0`, proving strict goals / strict
+      -- contradictions the relaxed combination cannot (ring carriers; the `Nat`
+      -- no-subtraction assembly ignores the tag and uses `leProof := Nat.le_of_lt`).
       let row := lhs.sub rhs
       let ltName ← carrierSubNonposName ``IntC.sub_nonpos_of_lt ``DyadicC.sub_nonpos_of_lt
         ``Field.sub_nonpos_of_lt
+      let negName ← carrierSubNonposName ``IntC.sub_neg_of_lt ``DyadicC.sub_neg_of_lt
+        ``Field.sub_neg_of_lt
       return #[{
         term := mkAppM ``HSub.hSub #[lhsExpr, rhsExpr],
         expr := row,
         proof := mkAppM ltName #[proof],
         lhsExpr := lhsExpr, rhsExpr := rhsExpr,
-        leProof := mkAppM ``Nat.le_of_lt #[proof] }]
+        leProof := mkAppM ``Nat.le_of_lt #[proof],
+        strict := true, strictProof := mkAppM negName #[proof] }]
   | some (.le, lhsExpr, rhsExpr, lhs, rhs) =>
       let row := lhs.sub rhs
       -- Row closure: `Int` needs native `IntC.*` lemmas (`Field.*` requires a `Field`

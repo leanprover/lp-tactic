@@ -66,6 +66,17 @@ theorem rat_add_nonpos {a b : Rat} (ha : a ≤ 0) (hb : b ≤ 0) : a + b ≤ 0 :
   have h := LP.Verify.RatAux.add_le_add ha hb
   simpa [Rat.zero_add] using h
 
+/-- A strictly positive scalar of a strictly negative value is strictly negative.
+Used to carry strictness through the weighted Farkas sum from a strict (`<`) row. -/
+theorem rat_smul_neg {a lam : Rat} (ha : a < 0) (hlam : 0 < lam) : lam * a < 0 :=
+  (Rat.mul_neg_iff_of_pos_left hlam).mpr ha
+
+/-- A strictly negative head plus a nonpositive tail is strictly negative. -/
+theorem rat_add_neg_nonpos {a b : Rat} (ha : a < 0) (hb : b ≤ 0) : a + b < 0 := by grind
+
+/-- A nonpositive head plus a strictly negative tail is strictly negative. -/
+theorem rat_add_nonpos_neg {a b : Rat} (ha : a ≤ 0) (hb : b < 0) : a + b < 0 := by grind
+
 /-- Final closer for non-strict goals.
 
 Given a nonpositive sum `s ≤ 0`, a nonnegative residual `c`, and the
@@ -102,6 +113,20 @@ theorem direct_lt_close {lhs rhs s c : Rat}
     exact (Rat.not_le.mpr hC) hSum)
   exact (Rat.lt_iff_sub_pos s c).mp hsc
 
+/-- Strict-row closer for strict goals: when a strict (`<`) row carries a positive
+multiplier the weighted sum is *strictly* negative (`s < 0`), so a merely nonnegative
+residual `0 ≤ c` already yields `lhs < rhs` (no `0 < c` needed). -/
+theorem direct_lt_close_strict {lhs rhs s c : Rat}
+    (hSum : s < 0) (hC : 0 ≤ c) (hIdent : rhs - lhs + s = c) :
+    lhs < rhs := by
+  apply rat_lt_of_pos_sub
+  have hStep : c - s = rhs - lhs := by
+    grind [Rat.sub_eq_add_neg, Rat.add_assoc, Rat.add_comm, Rat.add_left_comm,
+           Rat.add_neg_cancel, Rat.neg_add_cancel, Rat.add_zero, Rat.zero_add, Rat.neg_neg]
+  rw [← hStep]
+  -- 0 < c - s: `s < 0 ≤ c`, so `s < c`.
+  exact (Rat.lt_iff_sub_pos s c).mp (by grind)
+
 /-- Final closer for infeasibility: `s ≤ 0` and `s = c` with `0 < c` is
 `False`. Used when SoPlex reports an infeasible LP and supplies a Farkas
 certificate. -/
@@ -109,6 +134,13 @@ theorem direct_infeasible_close {s c : Rat}
     (hSum : s ≤ 0) (hC : 0 < c) (hIdent : s = c) : False := by
   rw [hIdent] at hSum
   exact Rat.not_le.mpr hC hSum
+
+/-- Strict-row infeasibility closer: a strictly negative sum `s < 0` that the identity
+equates to a nonnegative residual `0 ≤ c` is a contradiction (`s = c ≥ 0` but `s < 0`). -/
+theorem direct_infeasible_close_strict {s c : Rat}
+    (hSum : s < 0) (hC : 0 ≤ c) (hIdent : s = c) : False := by
+  rw [hIdent] at hSum
+  exact Rat.not_le.mpr hSum hC
 
 /-! ## Explicit-proof-term discharger lemmas
 
@@ -284,6 +316,13 @@ structure Row where
   lhsExpr : Expr := default
   rhsExpr : Expr := default
   leProof : MetaM Expr := throwError "lp: row has no ≤-proof (non-Nat carrier)"
+  /-- `true` for rows that came from a strict (`<`) hypothesis. Such a row carries the
+  strict `strictProof : term < 0` in addition to the relaxed `proof : term ≤ 0`, so a
+  positive multiplier on it can upgrade the Farkas sum from `≤ 0` to `< 0` — proving
+  strict goals / strict contradictions the relaxed (`≤`) combination cannot. -/
+  strict : Bool := false
+  /-- proof of `term < 0` (ring carriers), only present (and only forced) for strict rows. -/
+  strictProof : MetaM Expr := throwError "lp: row has no <-proof (non-strict row)"
 
 def ratType : Expr := mkConst ``Rat
 

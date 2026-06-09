@@ -177,32 +177,53 @@ def CCtx.toMethods (c : CCtx) : CarrierMethods :=
 
 /-! ## Weighted sum + assembly (field-specific: no clearing, unscaled `direct_*_close`). -/
 
-def CCtx.buildWeightedSum (c : CCtx) (entries : Array (Rat × Expr × Expr)) :
-    MetaM (Expr × Expr) := do
+/-- Strict-aware weighted sum. Each entry is `(λ, term, leProof, strictProof?)`; the sum
+proof is `s ≤ 0`, or `s < 0` when at least one strict row (positive multiplier) contributes
+its `strictProof : term < 0`. Returns `(sumExpr, sumProof, isStrict)`. -/
+def CCtx.buildWeightedSum (c : CCtx) (entries : Array (Rat × Expr × Expr × Option Expr)) :
+    MetaM (Expr × Expr × Bool) := do
   if entries.size = 0 then
     let proof ← mkAppOptM ``Field.zero_self_le (#[some c.α] ++ Array.replicate 6 none)
-    return (c.zero, proof)
+    return (c.zero, proof, false)
   let n := entries.size
-  let mkHead (lam : Rat) (term hRow : Expr) : MetaM (Expr × Expr) := do
+  let mkHead (lam : Rat) (term hRow : Expr) (sp? : Option Expr) :
+      MetaM (Expr × Expr × Bool) := do
     let head := c.mkMul (c.mkLit lam) term
-    let hLam ← c.mkLitNonneg lam
-    return (head, ← mkAppM ``Field.smul_nonpos #[hRow, hLam])
-  let (lamₖ, termₖ, hRowₖ) := entries[n - 1]!
-  let mut (sumExpr, sumProof) ← mkHead lamₖ termₖ hRowₖ
+    match sp? with
+    | some sp => return (head, ← mkAppM ``Field.smul_neg #[sp, ← c.mkLitPos lam], true)
+    | none => return (head, ← mkAppM ``Field.smul_nonpos #[hRow, ← c.mkLitNonneg lam], false)
+  let (lamₖ, termₖ, hRowₖ, spₖ?) := entries[n - 1]!
+  let (sₖ, pₖ, strictₖ) ← mkHead lamₖ termₖ hRowₖ spₖ?
+  let mut sumExpr := sₖ
+  let mut sumProof := pₖ
+  let mut sumStrict := strictₖ
   for i in [0:n-1] do
-    let (lam, term, hRow) := entries[n - 2 - i]!
-    let (head, headProof) ← mkHead lam term hRow
-    sumProof ← mkAppM ``Field.add_nonpos #[headProof, sumProof]
+    let (lam, term, hRow, sp?) := entries[n - 2 - i]!
+    let (head, headProof, headStrict) ← mkHead lam term hRow sp?
+    let (newProof, newStrict) ←
+      if headStrict then
+        let restLe ← if sumStrict then mkAppM ``Field.le_of_lt #[sumProof] else pure sumProof
+        pure (← mkAppM ``Field.add_neg_nonpos #[headProof, restLe], true)
+      else if sumStrict then
+        pure (← mkAppM ``Field.add_nonpos_neg #[headProof, sumProof], true)
+      else
+        pure (← mkAppM ``Field.add_nonpos #[headProof, sumProof], false)
     sumExpr := c.mkAdd head sumExpr
-  return (sumExpr, sumProof)
+    sumProof := newProof
+    sumStrict := newStrict
+  return (sumExpr, sumProof, sumStrict)
 
-def collectEntries (rows : Array Row) (mults : Array Rat) :
-    MetaM (Array (Rat × Expr × Expr)) := do
-  let mut entries : Array (Rat × Expr × Expr) := #[]
+/-- Build the weighted-sum entries; include a strict row's `term < 0` proof (`onlyStrict`
+gates whether strictness is wanted — `true` for strict goals / infeasibility). -/
+def collectEntries (rows : Array Row) (mults : Array Rat) (wantStrict : Bool) :
+    MetaM (Array (Rat × Expr × Expr × Option Expr)) := do
+  let mut entries : Array (Rat × Expr × Expr × Option Expr) := #[]
   for h : i in [0:rows.size] do
     let lam := mults[i]!
     if lam ≠ 0 then
-      entries := entries.push (lam, ← rows[i].term, ← rows[i].proof)
+      let sp? ← if wantStrict && rows[i].strict then pure (some (← rows[i].strictProof))
+                else pure none
+      entries := entries.push (lam, ← rows[i].term, ← rows[i].proof, sp?)
   return entries
 
 /-- Optimal-branch certificate: `Σ λᵢ·rowᵢ ≤ 0` + `(rhs-lhs)+s = c` ⇒ `lhs ≤ rhs` (or `<`). -/
@@ -215,15 +236,22 @@ def CCtx.assembleLeProof (c : CCtx) (rows : Array Row) (strict : Bool)
   unless isLinExprClosed residual do
     throwError "lp: dual certificate did not algebraically cancel the goal"
   let cVal := residual.const
+  let (sumExpr, sumProof, sumStrict) ← c.buildWeightedSum (← collectEntries rows mults strict)
   if strict then
-    unless decide (0 < cVal) do throwError "lp: goal not entailed; residual {cVal} not > 0"
+    if sumStrict then
+      unless decide (0 ≤ cVal) do throwError "lp: goal not entailed; residual {cVal} not ≥ 0"
+    else
+      unless decide (0 < cVal) do throwError "lp: goal not entailed; residual {cVal} not > 0 {
+        ""}(no strict hypothesis available to upgrade it)"
   else
     unless decide (0 ≤ cVal) do throwError "lp: goal not entailed; residual {cVal} not ≥ 0"
-  let (sumExpr, sumProof) ← c.buildWeightedSum (← collectEntries rows mults)
   let lhsId := c.mkAdd (c.mkSub rhs lhs) sumExpr
   let identProof ← ({ c.toMethods with atoms }).proveCertificateIdentity vars lhsId cVal
   if strict then
-    mkAppM ``Field.direct_lt_close #[sumProof, ← c.mkLitPos cVal, identProof]
+    if sumStrict then
+      mkAppM ``Field.direct_lt_close_strict #[sumProof, ← c.mkLitNonneg cVal, identProof]
+    else
+      mkAppM ``Field.direct_lt_close #[sumProof, ← c.mkLitPos cVal, identProof]
   else
     mkAppM ``Field.direct_le_close #[sumProof, ← c.mkLitNonneg cVal, identProof]
 
@@ -234,10 +262,17 @@ def CCtx.assembleInfeasibleProof (c : CCtx) (rows : Array Row) (mults : Array Ra
   let residual := computeResidual {} rowLins mults
   unless isLinExprClosed residual do throwError "lp: infeasible Farkas certificate did not cancel"
   let cVal := residual.const
-  unless decide (0 < cVal) do throwError "lp: infeasible residual {cVal} not > 0"
-  let (sumExpr, sumProof) ← c.buildWeightedSum (← collectEntries rows mults)
+  let (sumExpr, sumProof, sumStrict) ← c.buildWeightedSum (← collectEntries rows mults true)
+  if sumStrict then
+    unless decide (0 ≤ cVal) do throwError "lp: infeasible residual {cVal} not ≥ 0"
+  else
+    unless decide (0 < cVal) do throwError "lp: infeasible residual {cVal} not > 0"
   let identProof ← ({ c.toMethods with atoms }).proveCertificateIdentity vars sumExpr cVal
-  let hFalse ← mkAppM ``Field.direct_infeasible_close #[sumProof, ← c.mkLitPos cVal, identProof]
+  let hFalse ←
+    if sumStrict then
+      mkAppM ``Field.direct_infeasible_close_strict #[sumProof, ← c.mkLitNonneg cVal, identProof]
+    else
+      mkAppM ``Field.direct_infeasible_close #[sumProof, ← c.mkLitPos cVal, identProof]
   mkAppOptM ``False.elim #[some goalType, some hFalse]
 
 end LP.Tactic.LP.Internal.Field

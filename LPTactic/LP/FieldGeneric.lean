@@ -34,6 +34,8 @@ theorem le_of_sub_nonpos {a b : α} (h : a - b ≤ 0) : a ≤ b := by grind
 theorem sub_nonpos_of_le {a b : α} (h : a ≤ b) : a - b ≤ 0 := by grind
 /-- Strict-hypothesis relaxation: `a < b` used as the weaker `a - b ≤ 0`. -/
 theorem sub_nonpos_of_lt {a b : α} (h : a < b) : a - b ≤ 0 := by grind
+
+theorem sub_neg_of_lt {a b : α} (h : a < b) : a - b < 0 := by grind
 theorem sub_nonpos_of_eq {a b : α} (h : a = b) : a - b ≤ 0 := by grind
 /-- Rewrite `a / c` as `c⁻¹ * a` so the normalizer reuses the scalar-mul path
 (true even at `c = 0`). Args explicit to match `applyLemma`. -/
@@ -47,6 +49,15 @@ theorem smul_nonpos {a lam : α} (ha : a ≤ 0) (hlam : 0 ≤ lam) : lam * a ≤
   OrderedRing.mul_nonpos_of_nonneg_of_nonpos hlam ha
 
 theorem add_nonpos {a b : α} (ha : a ≤ 0) (hb : b ≤ 0) : a + b ≤ 0 := by grind
+
+/-- A strictly positive scalar of a strictly negative value is strictly negative
+(carries strictness through the weighted Farkas sum from a strict `<` row). -/
+theorem smul_neg {a lam : α} (ha : a < 0) (hlam : 0 < lam) : lam * a < 0 :=
+  OrderedRing.mul_neg_of_pos_of_neg hlam ha
+
+theorem add_neg_nonpos {a b : α} (ha : a < 0) (hb : b ≤ 0) : a + b < 0 := by grind
+theorem add_nonpos_neg {a b : α} (ha : a ≤ 0) (hb : b < 0) : a + b < 0 := by grind
+theorem le_of_lt {a b : α} (h : a < b) : a ≤ b := by grind
 
 theorem zero_self_le : (0 : α) ≤ 0 := by grind
 
@@ -80,8 +91,16 @@ theorem direct_le_close {lhs rhs s c : α}
 theorem direct_lt_close {lhs rhs s c : α}
     (hSum : s ≤ 0) (hC : 0 < c) (hIdent : rhs - lhs + s = c) : lhs < rhs := by grind
 
+/-- Strict-row closer: a strictly negative sum (`s < 0`, from a strict row with positive
+multiplier) proves the strict goal even at a merely nonnegative residual `0 ≤ c`. -/
+theorem direct_lt_close_strict {lhs rhs s c : α}
+    (hSum : s < 0) (hC : 0 ≤ c) (hIdent : rhs - lhs + s = c) : lhs < rhs := by grind
+
 theorem direct_infeasible_close {s c : α}
     (hSum : s ≤ 0) (hC : 0 < c) (hIdent : s = c) : False := by grind
+
+theorem direct_infeasible_close_strict {s c : α}
+    (hSum : s < 0) (hC : 0 ≤ c) (hIdent : s = c) : False := by grind
 
 end Ordered
 

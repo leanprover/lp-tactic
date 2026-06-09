@@ -159,16 +159,24 @@ def ratHypsContradiction (rows : Array Row) (mults : Array Rat) (vars : Array FV
   let residual := computeResidual {} rowLins mults
   unless isLinExprClosed residual do throwError "lp: Farkas certificate did not cancel"
   let cval := residual.const
-  let mut entries : Array (Rat × Expr × Expr) := #[]
+  let mut entries : Array (Rat × Expr × Expr × Option Expr) := #[]
   for h : i in [0:rows.size] do
     let lam := mults[i]!
-    if lam ≠ 0 then entries := entries.push (lam, ← rows[i].term, ← rows[i].proof)
-  let (sumExpr, sumProof) ← buildWeightedSumAndProof entries
+    if lam ≠ 0 then
+      let sp? ← if rows[i].strict then pure (some (← rows[i].strictProof)) else pure none
+      entries := entries.push (lam, ← rows[i].term, ← rows[i].proof, sp?)
+  let (sumExpr, sumProof, sumStrict) ← buildWeightedSumAndProof entries
   let identProof ← proveCertificateIdentity vars sumExpr cval atoms
   let cExpr ← mkRatLit cval
-  let hC ← mkDecideProof (← mkAppM ``LT.lt #[(← mkRatLit 0), cExpr])
-  let hFalse := mkAppN (mkConst ``direct_infeasible_close)
-    #[sumExpr, cExpr, sumProof, hC, identProof]
+  let hFalse ←
+    if sumStrict then
+      let hC ← mkDecideProof (← mkAppM ``LE.le #[(← mkRatLit 0), cExpr])
+      pure <| mkAppN (mkConst ``direct_infeasible_close_strict)
+        #[sumExpr, cExpr, sumProof, hC, identProof]
+    else
+      let hC ← mkDecideProof (← mkAppM ``LT.lt #[(← mkRatLit 0), cExpr])
+      pure <| mkAppN (mkConst ``direct_infeasible_close)
+        #[sumExpr, cExpr, sumProof, hC, identProof]
   mkAppOptM ``False.elim #[some goalType, some hFalse]
 
 /-- Build the per-invocation `FrontendCtx`, dispatched on the carrier (mirrors the

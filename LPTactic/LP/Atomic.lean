@@ -34,22 +34,30 @@ def assembleLeProof (rows : Array Row) (strict : Bool)
     throwError "lp: dual certificate did not algebraically cancel the goal{
       ""} (residual still depends on variables); refusing to build a proof"
   let c := residual.const
-  if strict then
-    unless decide (0 < c) do
-      throwError "lp: goal is not entailed; numerical residual is {c}, not > 0"
-  else
-    unless decide (0 ≤ c) do
-      throwError "lp: goal is not entailed; numerical residual is {c}, not ≥ 0"
   let rhsMinusLhs ← mkRatSub rhs lhs
-  let mut entries : Array (Rat × Expr × Expr) := #[]
+  -- For a strict goal, include each strict row's `term < 0` proof so a positive multiplier
+  -- on it upgrades the sum to `< 0` (proving the strict goal even when the residual `c = 0`).
+  let mut entries : Array (Rat × Expr × Expr × Option Expr) := #[]
   for h : i in [0:rows.size] do
     let lam := mults[i]!
     if lam ≠ 0 then
       let row := rows[i]
-      let term ← row.term
-      let proof ← row.proof
-      entries := entries.push (lam, term, proof)
-  let (sumExpr, sumProof) ← buildWeightedSumAndProof entries
+      let sp? ← if strict && row.strict then pure (some (← row.strictProof)) else pure none
+      entries := entries.push (lam, ← row.term, ← row.proof, sp?)
+  let (sumExpr, sumProof, sumStrict) ← buildWeightedSumAndProof entries
+  -- Residual sign required: a strict goal needs `0 < c`, UNLESS a strict row made the sum
+  -- strict (`sumStrict`), in which case `0 ≤ c` suffices.
+  if strict then
+    if sumStrict then
+      unless decide (0 ≤ c) do
+        throwError "lp: goal is not entailed; numerical residual is {c}, not ≥ 0"
+    else
+      unless decide (0 < c) do
+        throwError "lp: goal is not entailed; numerical residual is {c}, not > 0 {
+          ""}(no strict hypothesis available to upgrade it)"
+  else
+    unless decide (0 ≤ c) do
+      throwError "lp: goal is not entailed; numerical residual is {c}, not ≥ 0"
   let cExpr ← mkRatLit c
   let lhsId ← mkRatAdd rhsMinusLhs sumExpr
   -- Explicit-proof-term discharge of `lhsId = c`.
@@ -60,9 +68,14 @@ def assembleLeProof (rows : Array Row) (strict : Bool)
   -- deeply nested `sumProof`/`identProof` types can blow the elaborator's
   -- `maxRecDepth` on large LPs.
   if strict then
-    let hC ← mkDecideProof (← mkAppM ``LT.lt #[(← mkRatLit 0), cExpr])
-    return mkAppN (mkConst ``direct_lt_close)
-      #[lhs, rhs, sumExpr, cExpr, sumProof, hC, identProof]
+    if sumStrict then
+      let hC ← mkDecideProof (← mkAppM ``LE.le #[(← mkRatLit 0), cExpr])
+      return mkAppN (mkConst ``direct_lt_close_strict)
+        #[lhs, rhs, sumExpr, cExpr, sumProof, hC, identProof]
+    else
+      let hC ← mkDecideProof (← mkAppM ``LT.lt #[(← mkRatLit 0), cExpr])
+      return mkAppN (mkConst ``direct_lt_close)
+        #[lhs, rhs, sumExpr, cExpr, sumProof, hC, identProof]
   else
     let hC ← mkDecideProof (← mkAppM ``LE.le #[(← mkRatLit 0), cExpr])
     return mkAppN (mkConst ``direct_le_close)
@@ -81,20 +94,35 @@ def assembleInfeasibleProofRat (rows : Array Row) (strict : Bool)
     throwError "lp: SoPlex reported infeasible but the Farkas certificate did not{
       ""} algebraically cancel"
   let c := residual.const
-  unless decide (0 < c) do
-    throwError "lp: SoPlex reported infeasible but Farkas residual {c} is not > 0"
-  let mut entries : Array (Rat × Expr × Expr) := #[]
+  -- Include each strict row's `term < 0`, so a strict hypothesis with a positive multiplier
+  -- makes the Farkas sum strict (`< 0`) and certifies infeasibility even at residual `c = 0`
+  -- (e.g. `a < b, b ≤ a ⊢ False`), which the relaxed (`≤`) combination cannot.
+  let mut entries : Array (Rat × Expr × Expr × Option Expr) := #[]
   for h : i in [0:rows.size] do
     let lam := mults[i]!
     if lam ≠ 0 then
       let row := rows[i]
-      entries := entries.push (lam, ← row.term, ← row.proof)
-  let (sumExpr, sumProof) ← buildWeightedSumAndProof entries
+      let sp? ← if row.strict then pure (some (← row.strictProof)) else pure none
+      entries := entries.push (lam, ← row.term, ← row.proof, sp?)
+  let (sumExpr, sumProof, sumStrict) ← buildWeightedSumAndProof entries
+  -- `c > 0` always certifies infeasibility; a strict sum (`s < 0`) does so already at `0 ≤ c`.
+  if sumStrict then
+    unless decide (0 ≤ c) do
+      throwError "lp: SoPlex reported infeasible but Farkas residual {c} is not ≥ 0"
+  else
+    unless decide (0 < c) do
+      throwError "lp: SoPlex reported infeasible but Farkas residual {c} is not > 0"
   let cExpr ← mkRatLit c
   let identProof ← proveCertificateIdentity vars sumExpr c atoms
-  let hC ← mkDecideProof (← mkAppM ``LT.lt #[(← mkRatLit 0), cExpr])
-  let hFalse := mkAppN (mkConst ``direct_infeasible_close)
-    #[sumExpr, cExpr, sumProof, hC, identProof]
+  let hFalse ←
+    if sumStrict then
+      let hC ← mkDecideProof (← mkAppM ``LE.le #[(← mkRatLit 0), cExpr])
+      pure <| mkAppN (mkConst ``direct_infeasible_close_strict)
+        #[sumExpr, cExpr, sumProof, hC, identProof]
+    else
+      let hC ← mkDecideProof (← mkAppM ``LT.lt #[(← mkRatLit 0), cExpr])
+      pure <| mkAppN (mkConst ``direct_infeasible_close)
+        #[sumExpr, cExpr, sumProof, hC, identProof]
   let goalType ←
     if strict then mkAppM ``LT.lt #[lhs, rhs] else mkAppM ``LE.le #[lhs, rhs]
   mkAppOptM ``False.elim #[some goalType, some hFalse]

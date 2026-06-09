@@ -66,6 +66,8 @@ theorem sub_nonpos_of_le {a b : Int} (h : a ≤ b) : a - b ≤ 0 := by omega
 /-- Strict-hypothesis relaxation: `a < b` used as the weaker `a - b ≤ 0`. -/
 theorem sub_nonpos_of_lt {a b : Int} (h : a < b) : a - b ≤ 0 := by omega
 
+theorem sub_neg_of_lt {a b : Int} (h : a < b) : a - b < 0 := by omega
+
 theorem sub_nonpos_of_eq {a b : Int} (h : a = b) : a - b ≤ 0 := by omega
 
 /-! ## Weighted-sum sign lemmas (native `Int.mul`). -/
