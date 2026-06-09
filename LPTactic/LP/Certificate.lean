@@ -212,7 +212,7 @@ assigned it (same `canonAtom`) and emit `e = 1*v + 0` via `atom_norm`. Errors cl
 def normalizeAtom (atoms : AtomTable) (e : Expr) : MetaM (LinExpr × Expr × Expr) := do
   let some a ← canonAtom e
     | throwError "lp(normalize): unsupported Rat expression{indentExpr e}"
-  let some v := atoms.atomToFVar[a]?
+  let some v ← findDefEqAtom atoms.atomToFVar a
     | throwError "lp(normalize): atom not registered during parsing{indentExpr e}"
   let L : LinExpr := {coeffs := #[(v, 1)]}
   return (L, mkApp (mkConst ``atom_norm) e, ← render L atoms)
