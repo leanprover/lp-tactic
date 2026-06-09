@@ -98,42 +98,61 @@ Build a Lean expression representing the weighted sum
 together with a proof that this sum is `≤ 0`. `entries` lists only the
 nonzero multipliers, in iteration order.
 
-Returns `(sumExpr, sumProof)` where:
+Each entry is `(λ, term, leProof, strictProof?)` where `leProof : term ≤ 0` and
+`strictProof?` is `some (p : term < 0)` exactly for a strict (`<`) row carrying a positive
+multiplier. Returns `(sumExpr, sumProof, isStrict)` where:
 * `sumExpr : Rat` is the literal sum expression;
-* `sumProof : sumExpr ≤ 0`.
+* `sumProof : sumExpr ≤ 0` when `isStrict = false`, or `sumExpr < 0` when `isStrict = true`
+  (the sum is strict iff at least one strict row contributes).
 
-The empty list yields `sumExpr = (0 : Rat)` and the trivial proof
-`Rat.le_refl : (0 : Rat) ≤ 0`. -/
+The empty list yields `sumExpr = (0 : Rat)`, `isStrict = false`, and `Rat.le_refl`. -/
 def buildWeightedSumAndProof
-    (entries : Array (Rat × Expr × Expr)) :
-    MetaM (Expr × Expr) := do
+    (entries : Array (Rat × Expr × Expr × Option Expr)) :
+    MetaM (Expr × Expr × Bool) := do
   if entries.size = 0 then
     let zero ← mkRatLit 0
     let proof ← mkAppOptM ``Rat.le_refl #[some zero]
-    return (zero, proof)
-  -- Right-fold so the sum nests on the right and the proof is built
-  -- bottom-up. We accumulate (sumExpr, sumProof) as we go.
+    return (zero, proof, false)
+  -- One scaled head `λ * term`, with `(proof, strict)`: `λ*term < 0` for a strict row
+  -- (positive multiplier), else `λ*term ≤ 0`.
+  let scaled (lam : Rat) (term hRow : Expr) (sp? : Option Expr) :
+      MetaM (Expr × Expr × Bool) := do
+    let lamExpr ← mkRatLit lam
+    let head ← mkRatMul lamExpr term
+    match sp? with
+    | some sp =>
+      let hLamPos ← mkDecideProof (← mkAppM ``LT.lt #[(← mkRatLit 0), lamExpr])
+      return (head, ← mkAppM ``rat_smul_neg #[sp, hLamPos], true)
+    | none =>
+      let hLam ← mkDecideProof (← mkAppM ``LE.le #[(← mkRatLit 0), lamExpr])
+      return (head, ← mkAppM ``rat_smul_nonpos #[hRow, hLam], false)
+  -- Right-fold so the sum nests on the right and the proof is built bottom-up.
   let n := entries.size
   let last := n - 1
-  let (lamₖ, termₖ, hRowₖ) := entries[last]!
-  let lamₖExpr ← mkRatLit lamₖ
-  let hLamₖ ← mkDecideProof (← mkAppM ``LE.le #[(← mkRatLit 0), lamₖExpr])
-  let sumₖ ← mkRatMul lamₖExpr termₖ
-  let proofₖ ← mkAppM ``rat_smul_nonpos #[hRowₖ, hLamₖ]
+  let (lamₖ, termₖ, hRowₖ, spₖ?) := entries[last]!
+  let (sumₖ, proofₖ, strictₖ) ← scaled lamₖ termₖ hRowₖ spₖ?
   let mut sumExpr := sumₖ
   let mut sumProof := proofₖ
+  let mut sumStrict := strictₖ
   for i in [0:last] do
     let idx := last - 1 - i
-    let (lam, term, hRow) := entries[idx]!
-    let lamExpr ← mkRatLit lam
-    let hLam ← mkDecideProof (← mkAppM ``LE.le #[(← mkRatLit 0), lamExpr])
-    let head ← mkRatMul lamExpr term
-    let headProof ← mkAppM ``rat_smul_nonpos #[hRow, hLam]
+    let (lam, term, hRow, sp?) := entries[idx]!
+    let (head, headProof, headStrict) ← scaled lam term hRow sp?
     let newSum ← mkRatAdd head sumExpr
-    let newProof ← mkAppM ``rat_add_nonpos #[headProof, sumProof]
+    -- `head ⊕ rest`: strict if either side is strict.
+    let (newProof, newStrict) ←
+      if headStrict then
+        -- `head < 0`; weaken a strict rest to `≤ 0` to feed `rat_add_neg_nonpos`.
+        let restLe ← if sumStrict then mkAppM ``Rat.le_of_lt #[sumProof] else pure sumProof
+        pure (← mkAppM ``rat_add_neg_nonpos #[headProof, restLe], true)
+      else if sumStrict then
+        pure (← mkAppM ``rat_add_nonpos_neg #[headProof, sumProof], true)
+      else
+        pure (← mkAppM ``rat_add_nonpos #[headProof, sumProof], false)
     sumExpr := newSum
     sumProof := newProof
-  return (sumExpr, sumProof)
+    sumStrict := newStrict
+  return (sumExpr, sumProof, sumStrict)
 
 /-- Look up a variable's coefficient inside a `LinExpr`. -/
 def LinExpr.coeffOf (e : LinExpr) (v : FVarId) : Rat := Id.run do

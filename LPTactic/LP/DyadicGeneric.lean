@@ -59,6 +59,8 @@ theorem sub_nonpos_of_le {a b : Dyadic} (h : a ≤ b) : a - b ≤ 0 := by grind
 /-- Strict-hypothesis relaxation: `a < b` used as the weaker `a - b ≤ 0`. -/
 theorem sub_nonpos_of_lt {a b : Dyadic} (h : a < b) : a - b ≤ 0 := by grind
 
+theorem sub_neg_of_lt {a b : Dyadic} (h : a < b) : a - b < 0 := by grind
+
 theorem sub_nonpos_of_eq {a b : Dyadic} (h : a = b) : a - b ≤ 0 := by grind
 
 theorem dyadic_smul_nonpos {a k : Dyadic} (ha : a ≤ 0) (hk : 0 ≤ k) : k * a ≤ 0 :=
