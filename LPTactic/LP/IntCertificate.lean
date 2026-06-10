@@ -1,12 +1,12 @@
 /-
-`Int` carrier instance for the unified certificate engine. Provides `intMethods :
-CarrierMethods` (native `Int.ofNat`/`negSucc` literals, bare `Eq.refl` leaves) and the
-thin `Int`-specific assembly (multiplier clearing + native-`Int.mul` scaled/unscaled
-closers). The structural normalizer lives in `CarrierCertificate.lean`; only the
-per-carrier strategy + assembly are here.
+`Int` carrier instance for the unified certificate engine: native `Int.ofNat`/`negSucc`
+literals (defeq to user `OfNat`/`Neg` literals, so leaves close by bare `Eq.refl`) plus
+an integrality check on the cleared residual. The whole assembly (multiplier clearing,
+weighted sum, scaled/unscaled closers) is the shared ordered-ring one in
+`RingCertificate.lean`; only the literal renderer and scalar recognizer live here.
 -/
 module
-public meta import LPTactic.LP.CarrierCertificate
+public meta import LPTactic.LP.RingCertificate
 public import LPTactic.LP.IntGeneric
 
 public meta section
@@ -22,10 +22,6 @@ def mkIntNum (n : Int) : Expr :=
   | .ofNat k => mkApp (mkConst ``Int.ofNat) (mkRawNatLit k)
   | .negSucc k => mkApp (mkConst ``Int.negSucc) (mkRawNatLit k)
 
-/-- `@Eq.refl Int t` — valid as a proof of `t = m` whenever `t ≡ m` by kernel reduction. -/
-@[inline] def intRefl (t : Expr) : Expr :=
-  mkApp2 (mkConst ``Eq.refl [Level.succ Level.zero]) (mkConst ``Int) t
-
 /-- Recognize an `Int` scalar value: native `Int.ofNat`/`Int.negSucc` (the engine's own
 rendered literals) plus user `OfNat`/`Neg`/`HMul`/`HDiv` via `quickScalarLit?`. Uses
 `quickScalarLit?` (O(1) reject of `HAdd`/`HSub`), NEVER the O(N²) recursive `parseScalar?`. -/
@@ -36,185 +32,11 @@ partial def intScalarLit? (e : Expr) : MetaM (Option Rat) := do
     return (← parseNatLit? e.appArg!).map (fun k => ((Int.negSucc k : Int) : Rat))
   quickScalarLit? e
 
-/-- Apply an `IntC` lemma by base name (monomorphic — no universe/instance args). -/
-@[inline] def iLemma (name : Name) (args : Array Expr) : Expr :=
-  mkAppN (mkConst ((`LP.Tactic.LP.Internal.IntC).append name)) args
-
-/-- Per-invocation `Int` carrier: the `CarrierMethods` for the unified normalizer plus the
-cached `LE`/`LT` operator Exprs for the O(N) sign-decide proofs. -/
-structure ICtx where
-  m    : CarrierMethods
-  leFn : Expr
-  ltFn : Expr
-
-def mkICtx : MetaM ICtx := do
-  let int := mkConst ``Int
-  let u := Level.zero
-  let mk2 (cls op : Name) : MetaM Expr := do
-    let inst ← synthInstance (← mkAppM cls #[int, int, int])
-    return mkApp4 (mkConst op [u, u, u]) int int int inst
-  let addFn ← mk2 ``HAdd ``HAdd.hAdd
-  let mulFn ← mk2 ``HMul ``HMul.hMul
-  let subFn ← mk2 ``HSub ``HSub.hSub
-  let negFn := mkApp2 (mkConst ``Neg.neg [u]) int (← synthInstance (← mkAppM ``Neg #[int]))
-  let leFn  := mkApp2 (mkConst ``LE.le [u]) int (← synthInstance (← mkAppM ``LE #[int]))
-  let ltFn  := mkApp2 (mkConst ``LT.lt [u]) int (← synthInstance (← mkAppM ``LT #[int]))
-  let mkLit := fun (r : Rat) => mkIntNum r.num
-  let m : CarrierMethods := {
-    α := int, addFn, mulFn, subFn, negFn, mkLit
-    litAddPf := fun a b => intRefl (mkApp2 addFn (mkLit a) (mkLit b))
-    litMulPf := fun a b => intRefl (mkApp2 mulFn (mkLit a) (mkLit b))
-    litNegPf := fun a => intRefl (mkApp negFn (mkLit a))
-    scalarLit? := intScalarLit?
-    proveLitEq := fun e _r => pure (intRefl e)
-    applyLemma := iLemma
-    mkEqTrans := fun aE bE cE p q =>
-      mkApp6 (mkConst ``Eq.trans [Level.succ Level.zero]) int aE bE cE p q
-  }
-  return { m, leFn, ltFn }
-
-@[inline] def ICtx.mkLe (c : ICtx) (a b : Expr) : Expr := mkApp2 c.leFn a b
-@[inline] def ICtx.mkLt (c : ICtx) (a b : Expr) : Expr := mkApp2 c.ltFn a b
-@[inline] def ICtx.mkLit (c : ICtx) (r : Rat) : Expr := c.m.mkLit r
-
-/-! ### Clearing: rational multipliers → integer `(L, kᵢ, C)`. -/
-
-def clearMultipliers (mults : Array Rat) (cst : Rat) : MetaM (Int × Array Int × Int) := do
-  let L : Nat := denLcm mults
-  let Li : Int := (L : Int)
-  let ks ← mults.mapM (fun lam => do
-    let v := (Li : Rat) * lam
-    unless v.den == 1 do throwError "lp(int): cleared multiplier {v} not integral"
-    pure v.num)
-  let cV := (Li : Rat) * cst
-  unless cV.den == 1 do throwError "lp(int): cleared residual {cV} not integral"
-  return (Li, ks, cV.num)
-
-def collectEntries (rows : Array Row) (ks : Array Int) (wantStrict : Bool) :
-    MetaM (Array (Int × Expr × Expr × Option Expr)) := do
-  let mut entries : Array (Int × Expr × Expr × Option Expr) := #[]
-  for h : i in [0:rows.size] do
-    let k := ks[i]!
-    if k ≠ 0 then
-      let sp? ← if wantStrict && rows[i].strict then pure (some (← rows[i].strictProof))
-                else pure none
-      entries := entries.push (k, ← rows[i].term, ← rows[i].proof, sp?)
-  return entries
-
-/-- `Σ kᵢ * termᵢ : Int` with a proof it is `≤ 0`. Sign lemmas applied with EXPLICIT implicit
-args (no per-row typeclass inference); decide types built from the cached `leFn`. -/
-def ICtx.buildWeightedSum (c : ICtx) (entries : Array (Int × Expr × Expr × Option Expr)) :
-    MetaM (Expr × Expr × Bool) := do
-  if entries.size = 0 then
-    return (c.mkLit 0, iLemma `zero_self_le #[], false)
-  -- A scaled head `k * term`, strict (`< 0`) for a strict row with positive multiplier.
-  let mkHead (k : Int) (term hRow : Expr) (sp? : Option Expr) :
-      MetaM (Expr × Expr × Bool) := do
-    let kE := mkIntNum k
-    let head := c.m.mkMul kE term
-    match sp? with
-    | some sp =>
-      let hk ← mkDecideProof (c.mkLt (mkIntNum 0) kE)
-      return (head, iLemma `int_smul_neg #[term, kE, sp, hk], true)
-    | none =>
-      let hk ← mkDecideProof (c.mkLe (mkIntNum 0) kE)
-      return (head, iLemma `int_smul_nonpos #[term, kE, hRow, hk], false)
-  let n := entries.size
-  let (kₖ, termₖ, hRowₖ, spₖ?) := entries[n - 1]!
-  let (sₖ, pₖ, strictₖ) ← mkHead kₖ termₖ hRowₖ spₖ?
-  let mut sumExpr := sₖ
-  let mut sumProof := pₖ
-  let mut sumStrict := strictₖ
-  for i in [0:n-1] do
-    let (k, term, hRow, sp?) := entries[n - 2 - i]!
-    let (head, headProof, headStrict) ← mkHead k term hRow sp?
-    let (newProof, newStrict) :=
-      if headStrict then
-        -- `head < 0`; weaken a strict rest to `≤ 0` for `int_add_neg_nonpos`.
-        let restLe := if sumStrict then iLemma `int_le_of_lt #[sumExpr, mkIntNum 0, sumProof]
-                      else sumProof
-        (iLemma `int_add_neg_nonpos #[head, sumExpr, headProof, restLe], true)
-      else if sumStrict then
-        (iLemma `int_add_nonpos_neg #[head, sumExpr, headProof, sumProof], true)
-      else
-        (iLemma `int_add_nonpos #[head, sumExpr, headProof, sumProof], false)
-    sumExpr := c.m.mkAdd head sumExpr
-    sumProof := newProof
-    sumStrict := newStrict
-  return (sumExpr, sumProof, sumStrict)
-
-/-- Optimal-branch certificate over `Int`. L=1 (the common integer-multiplier case): no goal
-scaling, unscaled closer. L>1: scaled identity + scaled closer. -/
-def ICtx.assembleLeProof (c : ICtx) (rows : Array Row) (strict : Bool)
-    (objLin : LinExpr) (mults : Array Rat) (vars : Array FVarId) (lhs rhs : Expr) (atoms : AtomTable := {}) :
-    MetaM Expr := do
-  let rowLins := rows.map (·.expr)
-  let residual := computeResidual objLin rowLins mults
-  unless isLinExprClosed residual do
-    throwError "lp: dual certificate did not algebraically cancel the goal"
-  let cVal := residual.const
-  let (Li, ks, C) ← clearMultipliers mults cVal
-  let CE := mkIntNum C
-  let (sumExpr, sumProof, sumStrict) ← c.buildWeightedSum (← collectEntries rows ks strict)
-  -- Residual sign: a strict goal needs `0 < c`, UNLESS a strict row made the sum strict.
-  if strict then
-    if sumStrict then
-      unless decide (0 ≤ cVal) do throwError "lp: goal not entailed; residual {cVal} not ≥ 0"
-    else
-      unless decide (0 < cVal) do throwError "lp: goal not entailed; residual {cVal} not > 0 {
-        ""}(no strict hypothesis available to upgrade it)"
-  else
-    unless decide (0 ≤ cVal) do throwError "lp: goal not entailed; residual {cVal} not ≥ 0"
-  if Li == 1 then
-    let lhsId := c.m.mkAdd (c.m.mkSub rhs lhs) sumExpr
-    let identProof ← ({ c.m with atoms }).proveCertificateIdentity vars lhsId (C : Rat)
-    if strict then
-      if sumStrict then
-        let hC ← mkDecideProof (c.mkLe (mkIntNum 0) CE)
-        return iLemma `lt_close_strict #[lhs, rhs, sumExpr, CE, sumProof, hC, identProof]
-      else
-        let hC ← mkDecideProof (c.mkLt (mkIntNum 0) CE)
-        return iLemma `lt_close #[lhs, rhs, sumExpr, CE, sumProof, hC, identProof]
-    else
-      let hC ← mkDecideProof (c.mkLe (mkIntNum 0) CE)
-      return iLemma `le_close #[lhs, rhs, sumExpr, CE, sumProof, hC, identProof]
-  let LE := mkIntNum Li
-  let lhsId := c.m.mkAdd (c.m.mkMul LE (c.m.mkSub rhs lhs)) sumExpr
-  let identProof ← ({ c.m with atoms }).proveCertificateIdentity vars lhsId (C : Rat)
-  let hL ← mkDecideProof (c.mkLt (mkIntNum 0) LE)
-  if strict then
-    if sumStrict then
-      let hC ← mkDecideProof (c.mkLe (mkIntNum 0) CE)
-      return iLemma `scaled_lt_close_strict #[LE, lhs, rhs, sumExpr, CE, hL, sumProof, hC, identProof]
-    else
-      let hC ← mkDecideProof (c.mkLt (mkIntNum 0) CE)
-      return iLemma `scaled_lt_close #[LE, lhs, rhs, sumExpr, CE, hL, sumProof, hC, identProof]
-  else
-    let hC ← mkDecideProof (c.mkLe (mkIntNum 0) CE)
-    return iLemma `scaled_le_close #[LE, lhs, rhs, sumExpr, CE, hL, sumProof, hC, identProof]
-
-/-- Infeasible-branch (Farkas) certificate over `Int`. -/
-def ICtx.assembleInfeasibleProof (c : ICtx) (rows : Array Row) (mults : Array Rat)
-    (vars : Array FVarId) (goalType : Expr) (atoms : AtomTable := {}) : MetaM Expr := do
-  let rowLins := rows.map (·.expr)
-  let residual := computeResidual {} rowLins mults
-  unless isLinExprClosed residual do throwError "lp: infeasible Farkas did not cancel"
-  let cVal := residual.const
-  let (_, ks, C) ← clearMultipliers mults cVal
-  let (sumExpr, sumProof, sumStrict) ← c.buildWeightedSum (← collectEntries rows ks true)
-  if sumStrict then
-    unless decide (0 ≤ cVal) do throwError "lp: infeasible residual {cVal} not ≥ 0"
-  else
-    unless decide (0 < cVal) do throwError "lp: infeasible residual {cVal} not > 0"
-  let identProof ← ({ c.m with atoms }).proveCertificateIdentity vars sumExpr (C : Rat)
-  let CE := mkIntNum C
-  let hFalse ←
-    if sumStrict then
-      let hC ← mkDecideProof (c.mkLe (mkIntNum 0) CE)
-      pure <| iLemma `scaled_infeasible_close_strict #[sumExpr, CE, sumProof, hC, identProof]
-    else
-      let hC ← mkDecideProof (c.mkLt (mkIntNum 0) CE)
-      pure <| iLemma `scaled_infeasible_close #[sumExpr, CE, sumProof, hC, identProof]
-  mkAppOptM ``False.elim #[some goalType, some hFalse]
+/-- The `Int` `RingCtx`: integer multipliers only (the residual must clear to an
+integer; a fractional one means the certificate is not expressible over `Int`). -/
+def mkICtx : MetaM RingCtx :=
+  mkRingCtx ``Int `LP.Tactic.LP.Internal.IntC "int" (fun r => mkIntNum r.num) intScalarLit?
+    (fun cV => do
+      unless cV.den == 1 do throwError "lp(int): cleared residual {cV} not integral")
 
 end LP.Tactic.LP.Internal.IntC

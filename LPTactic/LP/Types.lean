@@ -3,6 +3,7 @@ public meta import Lean
 public import Init.Data.Vector.Lemmas
 public import LPTactic.Basic
 public import LPTactic.Q
+meta import LPTactic.LP.CarrierLemmas
 
 public meta section
 
@@ -45,8 +46,9 @@ theorem rat_sub_nonpos_of_eq {a b : Rat} (h : a = b) : a - b ≤ 0 := by
   simp [Rat.sub_eq_add_neg, Rat.add_neg_cancel]
 
 /-- Rewrite `e / c` as the scalar multiple `c⁻¹ * e` so the normalizer can reuse the
-scalar-multiplication path. Holds unconditionally (at `c = 0` both sides are `0`). -/
-theorem rat_div_eq_inv_mul (a b : Rat) : a / b = b⁻¹ * a := by grind
+scalar-multiplication path. Holds unconditionally (at `c = 0` both sides are `0`).
+Args explicit to match `applyLemma`. -/
+theorem div_eq_inv_mul (a b : Rat) : a / b = b⁻¹ * a := by grind
 
 theorem rat_lt_of_sub_neg {a b : Rat} (h : a - b < 0) : a < b := by
   have hAdd := (Rat.add_lt_add_right (a := a - b) (b := 0) (c := b)).mpr h
@@ -63,26 +65,31 @@ theorem rat_lt_of_pos_sub {a b : Rat} (h : 0 < b - a) : a < b := by
     subst hEq
     simp [Rat.sub_eq_add_neg, Rat.add_neg_cancel] at h)
 
-/-- A nonnegative scalar of a nonpositive value is nonpositive. -/
-theorem rat_smul_nonpos {a lam : Rat} (ha : a ≤ 0) (hlam : 0 ≤ lam) : lam * a ≤ 0 := by
-  have h := Rat.mul_le_mul_of_nonneg_left ha hlam
+/-- A nonnegative scalar of a nonpositive value is nonpositive. Implicit-arg order
+`{a k}` matches the shared `buildWeightedSumDecide` lemma applier. -/
+theorem smul_nonpos {a k : Rat} (ha : a ≤ 0) (hk : 0 ≤ k) : k * a ≤ 0 := by
+  have h := Rat.mul_le_mul_of_nonneg_left ha hk
   simpa [Rat.mul_zero] using h
 
 /-- Sum of two nonpositive `Rat`s is nonpositive. -/
-theorem rat_add_nonpos {a b : Rat} (ha : a ≤ 0) (hb : b ≤ 0) : a + b ≤ 0 := by
+theorem add_nonpos {a b : Rat} (ha : a ≤ 0) (hb : b ≤ 0) : a + b ≤ 0 := by
   have h := LP.Verify.RatAux.add_le_add ha hb
   simpa [Rat.zero_add] using h
 
 /-- A strictly positive scalar of a strictly negative value is strictly negative.
 Used to carry strictness through the weighted Farkas sum from a strict (`<`) row. -/
-theorem rat_smul_neg {a lam : Rat} (ha : a < 0) (hlam : 0 < lam) : lam * a < 0 :=
-  (Rat.mul_neg_iff_of_pos_left hlam).mpr ha
+theorem smul_neg {a k : Rat} (ha : a < 0) (hk : 0 < k) : k * a < 0 :=
+  (Rat.mul_neg_iff_of_pos_left hk).mpr ha
 
 /-- A strictly negative head plus a nonpositive tail is strictly negative. -/
-theorem rat_add_neg_nonpos {a b : Rat} (ha : a < 0) (hb : b ≤ 0) : a + b < 0 := by grind
+theorem add_neg_nonpos {a b : Rat} (ha : a < 0) (hb : b ≤ 0) : a + b < 0 := by grind
 
 /-- A nonpositive head plus a strictly negative tail is strictly negative. -/
-theorem rat_add_nonpos_neg {a b : Rat} (ha : a ≤ 0) (hb : b < 0) : a + b < 0 := by grind
+theorem add_nonpos_neg {a b : Rat} (ha : a ≤ 0) (hb : b < 0) : a + b < 0 := by grind
+
+theorem le_of_lt {a b : Rat} (h : a < b) : a ≤ b := Rat.le_of_lt h
+
+theorem zero_self_le : (0 : Rat) ≤ 0 := Rat.le_refl
 
 /-- Final closer for non-strict goals.
 
@@ -151,10 +158,10 @@ theorem direct_infeasible_close_strict {s c : Rat}
 
 /-! ## Explicit-proof-term discharger lemmas
 
-These lemmas are the fixed-arity building blocks for the `normalize` /
-`proveMerge` proof-term construction that discharges the closed `Rat`
-algebraic identities on both the optimal and infeasible branches of the
-`lp` tactic. Each lemma is applied by the metaprogram with `mkAppN` and
+These lemmas are the fixed-arity building blocks for the `normalizeR` /
+`proveMerge` proof-term construction (`CarrierCertificate.lean`) that discharges
+the closed `Rat` algebraic identities on both the optimal and infeasible branches
+of the `lp` tactic. Each lemma is applied by the metaprogram with `mkAppN` and
 explicit arguments; the
 kernel only structurally typechecks the resulting term, never reducing a
 recursive function over the certificate. Numeral side conditions on `Q`
@@ -165,66 +172,7 @@ in the produced proof.
 rendered right-nested with the constant innermost:
 `c₀ * x₀ + (c₁ * x₁ + (… + (cₙ₋₁ * xₙ₋₁ + r) …))`. -/
 
-/-- Atom normal form: `x = 1 * x + 0`. Used at fvar leaves of `normalize`. -/
-theorem atom_norm (x : Rat) : x = 1 * x + 0 := by
-  rw [Rat.one_mul, Rat.add_zero]
-
-/-- Merge step "take left": at this position the smaller atom is on the
-left side. Peel its head and thread the recursive result. -/
-theorem take_left (h ta b res : Rat) (e : ta + b = res) :
-    (h + ta) + b = h + res := by
-  subst e; exact Rat.add_assoc h ta b
-
-/-- Merge step "take right": at this position the smaller atom is on the
-right side. Float that head past the left operand and thread the recursive
-result. -/
-theorem take_right (a h tb res : Rat) (e : a + tb = res) :
-    a + (h + tb) = h + res := by
-  subst e
-  rw [Rat.add_comm a (h + tb), Rat.add_assoc, Rat.add_comm tb a]
-
-/-- Merge step "combine": shared atom; coefficients `c'` and `c` combine
-to `m = c' + c`. Emit a single `m * x` head and thread the recursive
-result. -/
-theorem combine (x ta tb res c' c m : Rat)
-    (e : ta + tb = res) (hm : c' + c = m) :
-    (c' * x + ta) + (c * x + tb) = m * x + res := by
-  subst e; subst hm
-  grind [Rat.add_mul, Rat.add_assoc, Rat.add_comm, Rat.add_left_comm]
-
-/-- Merge step "combine to zero": shared atom whose merged coefficient is
-zero. Drop the head entirely. -/
-theorem combine_zero (x ta tb res c' c : Rat)
-    (e : ta + tb = res) (hm : c' + c = 0) :
-    (c' * x + ta) + (c * x + tb) = res := by
-  subst e
-  have hzero : c' * x + c * x = 0 := by
-    rw [← Rat.add_mul, hm, Rat.zero_mul]
-  grind [Rat.add_assoc, Rat.add_comm, Rat.add_left_comm, Rat.add_zero, Rat.zero_add]
-
-/-- `smul` walk step: scaling pushes `k` through one rendered head. -/
-theorem smul_cons (k x c m rest rest' : Rat)
-    (hm : k * c = m) (e : k * rest = rest') :
-    k * (c * x + rest) = m * x + rest' := by
-  subst hm; subst e
-  rw [Rat.mul_add, Rat.mul_assoc]
-
-/-- `smul` walk step when the scaled coefficient vanishes (`k * c = 0`): the `m * x`
-head drops, so the result is just `rest'`. Used when scaling by `k = 0` (a literal
-`0 * e`), keeping the proof's RHS in step with the dropped render term. -/
-theorem smul_cons_zero (k x c rest rest' : Rat)
-    (hm : k * c = 0) (e : k * rest = rest') :
-    k * (c * x + rest) = rest' := by
-  subst e
-  have hzero : k * (c * x) = 0 := by rw [← Rat.mul_assoc, hm, Rat.zero_mul]
-  rw [Rat.mul_add, hzero, Rat.zero_add]
-
-/-- `neg` walk step: negation pushes through one rendered head. -/
-theorem neg_cons (x c m rest rest' : Rat)
-    (hm : -c = m) (e : -rest = rest') :
-    -(c * x + rest) = m * x + rest' := by
-  subst hm; subst e
-  rw [Rat.neg_add, Rat.neg_mul]
+declare_lp_normalizer_ring_lemmas Rat
 
 /-! ### Mini-`norm_num` for `Q`-shaped `Rat` numeral leaves.
 
@@ -250,36 +198,6 @@ theorem ratlit_neg (qa qm : Q)
          = qm.num * ((Q.neg qa).den : Int)) :
     -qa.toRat = qm.toRat := by
   rw [← Q.toRat_neg]; exact Q.toRat_eq_of_cross h
-
-/-! ### Congruence lemmas used at `normalize`'s syntax-node boundaries.
-
-Each is one application per `+`/`-`/`*`/`-` syntax node — O(N) total per
-row, not the inner O(N²) hot path. Stated with explicit `Rat` arguments
-so the metaprogram applies them via `mkAppN`. -/
-
-theorem add_congr_eq (a A b B : Rat) (ha : a = A) (hb : b = B) :
-    a + b = A + B := by subst ha; subst hb; rfl
-
-theorem mul_congr_eq_r (k a A : Rat) (e : a = A) : k * a = k * A := by
-  subst e; rfl
-
-theorem neg_congr_eq (a A : Rat) (e : a = A) : -a = -A := by subst e; rfl
-
-theorem sub_to_add_neg (a b : Rat) : a - b = a + (-b) := Rat.sub_eq_add_neg a b
-
-/-- Fast-path normalizer lemma for the `coefficient * atom` pattern that
-dominates dense rows: `k * x = k * x + 0`. Stated with `kU`/`kL` separate
-so the metaprogram can supply the user's coefficient Expr on the left and
-the canonical `Q.toRat` form on the right; the equality is `rfl` once
-both reduce, but stating it explicitly lets the rest of the proof keep
-`Q.toRat` form uniformly. -/
-theorem mul_atom_norm (k x : Rat) : k * x = k * x + 0 := by
-  rw [Rat.add_zero]
-
-/-- Fast-path normalizer lemma for the unary `-atom` pattern:
-`-x = -1 * x + 0`. -/
-theorem neg_atom_norm (x : Rat) : -x = -1 * x + 0 := by
-  rw [Rat.add_zero, Rat.neg_mul, Rat.one_mul]
 
 /-! ## Parsing affine `Rat` expressions and `≤`/`=` hypotheses.
 

@@ -1,7 +1,7 @@
 module
 public meta import LPTactic.Dispatch
 public meta import LPTactic.LP.BackendOption
-public meta import LPTactic.LP.Certificate
+public meta import LPTactic.LP.RatCertificate
 public meta import LPTactic.LP.FieldCertificate
 public meta import LPTactic.LP.IntCertificate
 public meta import LPTactic.LP.DyadicCertificate
@@ -15,117 +15,126 @@ open LP.Tactic (Q)
 
 namespace LP.Tactic.LP.Internal
 
+/-! ## Carrier dispatch.
+
+The single place the supported carriers are enumerated. The atomic discharger
+(`proveEntailed`), the `=`-goal antisymmetry split, and the `∃`/`maximize`
+frontends all consume the same `CarrierOps` record, so adding a carrier means
+extending `mkCarrierOps` once. -/
+
+inductive CarrierKind where
+  | rat | int | dyadic | nat | field
+  deriving BEq, Repr
+
+/-- Detect the goal's carrier kind by `isDefEq` (not a syntactic check), so aliases /
+reducible defs hit the fast paths too; only genuinely different carriers (e.g. `ℝ`)
+land on the field path. -/
+def detectCarrierKind (carrier : Expr) : MetaM CarrierKind := do
+  if ← isDefEq carrier ratType then return .rat
+  if ← isDefEq carrier (mkConst ``Int) then return .int
+  if ← isDefEq carrier (mkConst ``Dyadic) then return .dyadic
+  if ← isDefEq carrier (mkConst ``Nat) then return .nat
+  return .field
+
+/-- The per-invocation carrier strategy: certificate assembly for both LP branches,
+antisymmetry for the `=`-goal split, and the frontend witness-numeral renderer. -/
+structure CarrierOps where
+  carrier : Expr
+  kind : CarrierKind
+  /-- Optimal-branch certificate (`rows strict objLin mults vars lhs rhs atoms`). -/
+  assembleLe : Array Row → Bool → LinExpr → Array Rat → Array FVarId → Expr → Expr →
+    AtomTable → MetaM Expr
+  /-- Infeasible-branch (Farkas) certificate; proves `goalType` via `False.elim`
+  (`rows mults vars goalType atoms`). -/
+  assembleInfeasible : Array Row → Array Rat → Array FVarId → Expr → AtomTable → MetaM Expr
+  /-- `lhs ≤ rhs → rhs ≤ lhs → lhs = rhs`, carrier-native. -/
+  leAntisymm : Expr → Expr → MetaM Expr
+  /-- Render a primal/bound `Rat` value as a carrier literal for the `∃`/`maximize`
+  frontends; throws if `v` is not representable in the carrier (non-integer for
+  `Int`/`Nat`, negative for `Nat`, non-dyadic for `Dyadic`). That case is genuine
+  integer/lattice programming (a fractional vertex/optimum has no carrier witness),
+  which is `omega`/`cutsat`'s job, not `lp`'s ℚ-Farkas. -/
+  mkNumeral : Rat → MetaM Expr
+
+/-- Build the `CarrierOps` for `carrier`. Computable carriers take fast paths that
+render coefficients as native kernel-reducible literals (defeq to user literals, no
+`userLit = ofRat r` bridge): `Rat` via the `Q`-literal discharger, `Int`/`Dyadic` via
+the integer-cleared native-mul discharger, `Nat` via the no-subtraction semiring
+assembly. Only genuine non-computable carriers (e.g. `ℝ`) synthesize the field `CCtx`. -/
+def mkCarrierOps (carrier : Expr) : MetaM CarrierOps := do
+  match ← detectCarrierKind carrier with
+  | .rat =>
+    let rc ← mkRatCtx
+    return {
+      carrier, kind := .rat
+      assembleLe := fun rows strict objLin mults vars lhs rhs atoms =>
+        rc.assembleLeProof rows strict objLin mults vars lhs rhs atoms
+      assembleInfeasible := fun rows mults vars goalType atoms =>
+        rc.assembleInfeasibleProof rows mults vars goalType atoms
+      -- `Field.le_antisymm` still *requires* a `Field` instance (its `omit` only drops
+      -- it from the proof, not the signature); `Rat` has one, so this is fine here.
+      leAntisymm := fun h₁ h₂ => mkAppM ``Field.le_antisymm #[h₁, h₂]
+      -- Witness numerals use the structural `OfNat`/`Neg`/`HDiv` shapes (recognized by
+      -- the parser), built from the field context on demand.
+      mkNumeral := fun v => do (← Field.mkCCtx carrier).mkRatNumeral v }
+  | .int =>
+    let ic ← IntC.mkICtx
+    return {
+      carrier, kind := .int
+      assembleLe := fun rows strict objLin mults vars lhs rhs atoms =>
+        ic.assembleLeProof rows strict objLin mults vars lhs rhs atoms
+      assembleInfeasible := fun rows mults vars goalType atoms =>
+        ic.assembleInfeasibleProof rows mults vars goalType atoms
+      leAntisymm := fun h₁ h₂ => mkAppM ``IntC.le_antisymm #[h₁, h₂]
+      mkNumeral := fun v => do
+        unless v.den == 1 do
+          throwError "lp: `∃`/`maximize` over `Int` needs an integer value, but the {
+            ""}LP gave {v}; integrality is `omega`/`cutsat`'s job, not `lp`'s ℚ-Farkas"
+        pure (IntC.mkIntNum v.num) }
+  | .dyadic =>
+    let dc ← DyadicC.mkDCtx
+    return {
+      carrier, kind := .dyadic
+      assembleLe := fun rows strict objLin mults vars lhs rhs atoms =>
+        dc.assembleLeProof rows strict objLin mults vars lhs rhs atoms
+      assembleInfeasible := fun rows mults vars goalType atoms =>
+        dc.assembleInfeasibleProof rows mults vars goalType atoms
+      leAntisymm := fun h₁ h₂ => mkAppM ``DyadicC.le_antisymm #[h₁, h₂]
+      mkNumeral := fun v => do
+        unless (DyadicC.pow2Log? v.den).isSome do
+          throwError "lp: `∃`/`maximize` over `Dyadic` needs a dyadic value (denominator {
+            ""}a power of two), but the LP gave {v}"
+        pure (DyadicC.mkDyadicNum v) }
+  | .nat =>
+    let nc ← NatC.mkNCtx
+    return {
+      carrier, kind := .nat
+      assembleLe := fun rows strict objLin mults vars lhs rhs _atoms =>
+        nc.assembleLeProof rows strict objLin mults vars lhs rhs
+      assembleInfeasible := fun rows mults vars goalType _atoms =>
+        nc.assembleInfeasibleProof rows mults vars goalType
+      leAntisymm := fun h₁ h₂ => mkAppM ``NatC.le_antisymm #[h₁, h₂]
+      mkNumeral := fun v => do
+        unless v.den == 1 && v.num ≥ 0 do
+          throwError "lp: `∃`/`maximize` over `Nat` needs a nonneg integer value, but the {
+            ""}LP gave {v}; integrality is `omega`/`cutsat`'s job, not `lp`'s ℚ-Farkas"
+        pure (NatC.mkNatNum v) }
+  | .field =>
+    let cc ← Field.mkCCtx carrier
+    return {
+      carrier, kind := .field
+      assembleLe := fun rows strict objLin mults vars lhs rhs atoms =>
+        cc.assembleLeProof rows strict objLin mults vars lhs rhs atoms
+      assembleInfeasible := fun rows mults vars goalType atoms =>
+        cc.assembleInfeasibleProof rows mults vars goalType atoms
+      leAntisymm := fun h₁ h₂ => mkAppM ``Field.le_antisymm #[h₁, h₂]
+      mkNumeral := cc.mkRatNumeral }
+
 /-! ## Per-goal driver.
 
-Given a parsed atomic `Rat` goal `lhs op rhs` and the collected `≤`/`=`
+Given a parsed atomic comparison goal `lhs op rhs` and the collected `≤`/`=`
 hypotheses-as-rows, build the LP, run SoPlex, and assemble the direct
 certificate proof. -/
-
-/-- Assemble the optimal-branch certificate proof from the numerical
-multipliers and the parsed rows. Shared between the SoPlex-driven path
-and the trivial closed-goal short-circuit (where multipliers are all
-zero and `c = objLin.const`). -/
-def assembleLeProof (rows : Array Row) (strict : Bool)
-    (objLin : LinExpr) (mults : Array Rat) (vars : Array FVarId)
-    (lhs rhs : Expr) (atoms : AtomTable := {}) : TacticM Expr := do
-  let rowLins := rows.map (·.expr)
-  let residual := computeResidual objLin rowLins mults
-  unless isLinExprClosed residual do
-    throwError "lp: dual certificate did not algebraically cancel the goal{
-      ""} (residual still depends on variables); refusing to build a proof"
-  let c := residual.const
-  let rhsMinusLhs ← mkRatSub rhs lhs
-  -- For a strict goal, include each strict row's `term < 0` proof so a positive multiplier
-  -- on it upgrades the sum to `< 0` (proving the strict goal even when the residual `c = 0`).
-  let mut entries : Array (Rat × Expr × Expr × Option Expr) := #[]
-  for h : i in [0:rows.size] do
-    let lam := mults[i]!
-    if lam ≠ 0 then
-      let row := rows[i]
-      let sp? ← if strict && row.strict then pure (some (← row.strictProof)) else pure none
-      entries := entries.push (lam, ← row.term, ← row.proof, sp?)
-  let (sumExpr, sumProof, sumStrict) ← buildWeightedSumAndProof entries
-  -- Residual sign required: a strict goal needs `0 < c`, UNLESS a strict row made the sum
-  -- strict (`sumStrict`), in which case `0 ≤ c` suffices.
-  if strict then
-    if sumStrict then
-      unless decide (0 ≤ c) do
-        throwError "lp: goal is not entailed; numerical residual is {c}, not ≥ 0"
-    else
-      unless decide (0 < c) do
-        throwError "lp: goal is not entailed; numerical residual is {c}, not > 0 {
-          ""}(no strict hypothesis available to upgrade it)"
-  else
-    unless decide (0 ≤ c) do
-      throwError "lp: goal is not entailed; numerical residual is {c}, not ≥ 0"
-  let cExpr ← mkRatLit c
-  let lhsId ← mkRatAdd rhsMinusLhs sumExpr
-  -- Explicit-proof-term discharge of `lhsId = c`.
-  let identProof ← proveCertificateIdentity vars lhsId c atoms
-  -- Build the final closer by explicit-argument application instead of
-  -- `mkAppM`. The four implicits (`lhs`, `rhs`, `s`, `c`) are already in
-  -- hand here, so making `mkAppM` rediscover them by `isDefEq` over the
-  -- deeply nested `sumProof`/`identProof` types can blow the elaborator's
-  -- `maxRecDepth` on large LPs.
-  if strict then
-    if sumStrict then
-      let hC ← mkDecideProof (← mkAppM ``LE.le #[(← mkRatLit 0), cExpr])
-      return mkAppN (mkConst ``direct_lt_close_strict)
-        #[lhs, rhs, sumExpr, cExpr, sumProof, hC, identProof]
-    else
-      let hC ← mkDecideProof (← mkAppM ``LT.lt #[(← mkRatLit 0), cExpr])
-      return mkAppN (mkConst ``direct_lt_close)
-        #[lhs, rhs, sumExpr, cExpr, sumProof, hC, identProof]
-  else
-    let hC ← mkDecideProof (← mkAppM ``LE.le #[(← mkRatLit 0), cExpr])
-    return mkAppN (mkConst ``direct_le_close)
-      #[lhs, rhs, sumExpr, cExpr, sumProof, hC, identProof]
-
-/-- `Rat` fast-path Farkas closer (infeasible branch), via the original `Q`-literal
-discharger (`buildWeightedSumAndProof`/`mkRatLit`/`direct_infeasible_close`). Mirrors
-`Field.assembleInfeasibleProof` but produces the byte-for-byte shipped `Rat` proof term,
-avoiding the generic `ofRat` literal bridge. -/
-def assembleInfeasibleProofRat (rows : Array Row) (strict : Bool)
-    (mults : Array Rat) (vars : Array FVarId) (lhs rhs : Expr)
-    (atoms : AtomTable := {}) : TacticM Expr := do
-  let rowLins := rows.map (·.expr)
-  let residual := computeResidual {} rowLins mults
-  unless isLinExprClosed residual do
-    throwError "lp: SoPlex reported infeasible but the Farkas certificate did not{
-      ""} algebraically cancel"
-  let c := residual.const
-  -- Include each strict row's `term < 0`, so a strict hypothesis with a positive multiplier
-  -- makes the Farkas sum strict (`< 0`) and certifies infeasibility even at residual `c = 0`
-  -- (e.g. `a < b, b ≤ a ⊢ False`), which the relaxed (`≤`) combination cannot.
-  let mut entries : Array (Rat × Expr × Expr × Option Expr) := #[]
-  for h : i in [0:rows.size] do
-    let lam := mults[i]!
-    if lam ≠ 0 then
-      let row := rows[i]
-      let sp? ← if row.strict then pure (some (← row.strictProof)) else pure none
-      entries := entries.push (lam, ← row.term, ← row.proof, sp?)
-  let (sumExpr, sumProof, sumStrict) ← buildWeightedSumAndProof entries
-  -- `c > 0` always certifies infeasibility; a strict sum (`s < 0`) does so already at `0 ≤ c`.
-  if sumStrict then
-    unless decide (0 ≤ c) do
-      throwError "lp: SoPlex reported infeasible but Farkas residual {c} is not ≥ 0"
-  else
-    unless decide (0 < c) do
-      throwError "lp: SoPlex reported infeasible but Farkas residual {c} is not > 0"
-  let cExpr ← mkRatLit c
-  let identProof ← proveCertificateIdentity vars sumExpr c atoms
-  let hFalse ←
-    if sumStrict then
-      let hC ← mkDecideProof (← mkAppM ``LE.le #[(← mkRatLit 0), cExpr])
-      pure <| mkAppN (mkConst ``direct_infeasible_close_strict)
-        #[sumExpr, cExpr, sumProof, hC, identProof]
-    else
-      let hC ← mkDecideProof (← mkAppM ``LT.lt #[(← mkRatLit 0), cExpr])
-      pure <| mkAppN (mkConst ``direct_infeasible_close)
-        #[sumExpr, cExpr, sumProof, hC, identProof]
-  let goalType ←
-    if strict then mkAppM ``LT.lt #[lhs, rhs] else mkAppM ``LE.le #[lhs, rhs]
-  mkAppOptM ``False.elim #[some goalType, some hFalse]
 
 /-- For the `Nat` carrier, build a `0 ≤ x` row for each LP variable. lp's columns are free
 (unbounded below), but every `Nat` value is `≥ 0`; linarith gets this from its ℕ→ℤ
@@ -177,7 +186,7 @@ def castNonnegRows (vars : Array FVarId) (atoms : AtomTable)
   return out
 
 /-- Direction-independent setup shared by both directions of an `=` goal: the goal
-sides parsed once, the carrier contexts synthesized once, and the rows augmented once
+sides parsed once, the carrier ops synthesized once, and the rows augmented once
 with the carrier's nonnegativity facts. An `=` goal proves both `≤` directions from
 one `EntailEnv` instead of redoing this work per direction. -/
 structure EntailEnv where
@@ -188,10 +197,7 @@ structure EntailEnv where
   rhs : Expr
   lhsLin : LinExpr
   rhsLin : LinExpr
-  cctx? : Option Field.CCtx := none
-  ictx? : Option IntC.ICtx := none
-  dctx? : Option DyadicC.DCtx := none
-  nctx? : Option NatC.NCtx := none
+  ops : CarrierOps
 
 def mkEntailEnv (rows : Array Row) (vars : Array FVarId) (lhs rhs : Expr)
     (atoms : AtomTable := {}) : TacticM EntailEnv := do
@@ -207,38 +213,21 @@ def mkEntailEnv (rows : Array Row) (vars : Array FVarId) (lhs rhs : Expr)
     (do pure ((← parseExpr lhs), (← parseExpr rhs))).run
         { vars := vars, carrier, allowAtoms := true
           atomToFVar := atoms.atomToFVar, fvarToAtom := atoms.fvarToAtom }
-  -- Computable carriers take fast paths that render coefficients as native
-  -- kernel-reducible literals (defeq to user literals, no `userLit = ofRat r`
-  -- bridge and none of the field engine's ~20% overhead): `Rat` via the
-  -- original `Q`-discharger, `Int` via the integer-cleared native-`Int.mul`
-  -- discharger. Carrier tests use `isDefEq` (not a syntactic check) so
-  -- aliases / reducible defs hit the fast paths too; only genuine
-  -- non-computable carriers (e.g. `ℝ`) synthesize the field `CCtx`.
-  let isRat ← isDefEq carrier ratType
-  let isInt ← isDefEq carrier (mkConst ``Int)
-  let isDyadic ← isDefEq carrier (mkConst ``Dyadic)
-  let isNat ← isDefEq carrier (mkConst ``Nat)
-  let cctx? : Option Field.CCtx ←
-    if isRat || isInt || isDyadic || isNat then pure none
-    else pure (some (← Field.mkCCtx carrier))
-  let ictx? : Option IntC.ICtx ←
-    if isInt then pure (some (← IntC.mkICtx)) else pure none
-  let dctx? : Option DyadicC.DCtx ←
-    if isDyadic then pure (some (← DyadicC.mkDCtx)) else pure none
-  let nctx? : Option NatC.NCtx ←
-    if isNat then pure (some (← NatC.mkNCtx)) else pure none
+  let ops ← mkCarrierOps carrier
   -- ℕ nonnegativity: add a `0 ≤ x` row per variable for the `Nat` carrier (lp's columns are
   -- free, but ℕ values are `≥ 0`), so goals like `0 ≤ n` or `n ≤ n + m` aren't spuriously
   -- reported unbounded. For ring carriers, the analogous `0 ≤ ↑n` rows for `Nat`-cast atoms.
   let rows ←
-    if isNat then pure (rows ++ (← natNonnegRows vars atoms))
-    else if isRat then pure rows  -- the Rat fast-path normalizer doesn't yet thread cast
-                                  -- atoms through the certificate identity; ℝ uses the CCtx path.
+    if ops.kind == .nat then pure (rows ++ (← natNonnegRows vars atoms))
+    else if ops.kind == .rat then
+      pure rows  -- cast-atom nonneg rows are not yet enabled on the Rat fast path;
+                 -- ℝ uses the field path below.
     else
       let subNonposName :=
-        if isInt then ``IntC.sub_nonpos_of_le
-        else if isDyadic then ``DyadicC.sub_nonpos_of_le
-        else ``Field.sub_nonpos_of_le
+        match ops.kind with
+        | .int => ``IntC.sub_nonpos_of_le
+        | .dyadic => ``DyadicC.sub_nonpos_of_le
+        | _ => ``Field.sub_nonpos_of_le
       -- Build `0 ≤ (↑n : R)` for a cast atom `e = @Nat.cast R _ n`. `Int` has a core
       -- `Int.natCast_nonneg`; other ordered-ring carriers (`ℝ`, `Rat`, …) use the `Grind`
       -- `OrderedRing.natCast_nonneg` — we pin only `R` and unify the result against `e`,
@@ -246,7 +235,7 @@ def mkEntailEnv (rows : Array Row) (vars : Array FVarId) (lhs rhs : Expr)
       let mkNonneg (e : Expr) : MetaM Expr := do
         let args := e.getAppArgs
         let R := args[0]!; let n := args[2]!
-        if isInt then
+        if ops.kind == .int then
           return ← mkAppM ``Int.natCast_nonneg #[n]
         -- Fully apply `natCast_nonneg` (carrier `R`, its instances inferred, cast `n`), then
         -- confirm by defeq that it proves `0 ≤ e` for the atom's own `NatCast` instance. We
@@ -261,7 +250,7 @@ def mkEntailEnv (rows : Array Row) (vars : Array FVarId) (lhs rhs : Expr)
         -- the atom verbatim and the certificate identity stays consistent.
         mkExpectedTypeHint (← instantiateMVars proof) want
       pure (rows ++ (← castNonnegRows vars atoms subNonposName mkNonneg))
-  return { rows, vars, atoms, lhs, rhs, lhsLin, rhsLin, cctx?, ictx?, dctx?, nctx? }
+  return { rows, vars, atoms, lhs, rhs, lhsLin, rhsLin, ops }
 
 /-- Prove the entailed comparison from a prebuilt `EntailEnv`: `lhs ≤ rhs` (or
 `lhs < rhs` when `strict`), or the swapped direction `rhs ≤ lhs` when `swap` —
@@ -286,12 +275,7 @@ def proveEntailedCore (env : EntailEnv) (strict : Bool) (swap : Bool := false) :
     (isLinExprClosed objLin &&
      (if strict then decide (0 < objLin.const) else decide (0 ≤ objLin.const)))
   let assembleOptimal (mults : Array Rat) : TacticM Expr :=
-    match env.nctx?, env.ictx?, env.dctx?, env.cctx? with
-    | some nc, _, _, _ => nc.assembleLeProof rows strict objLin mults vars lhs rhs
-    | _, some ic, _, _ => ic.assembleLeProof rows strict objLin mults vars lhs rhs atoms
-    | _, _, some dc, _ => dc.assembleLeProof rows strict objLin mults vars lhs rhs atoms
-    | _, _, _, none    => assembleLeProof rows strict objLin mults vars lhs rhs atoms
-    | _, _, _, some c  => c.assembleLeProof rows strict objLin mults vars lhs rhs atoms
+    env.ops.assembleLe rows strict objLin mults vars lhs rhs atoms
   if canShortcut then
     let mults := Array.replicate rows.size (0 : Rat)
     return ← assembleOptimal mults
@@ -366,12 +350,7 @@ def proveEntailedCore (env : EntailEnv) (strict : Bool) (swap : Bool := false) :
   | .infeasible =>
       let goalType ←
         if strict then mkAppM ``LT.lt #[lhs, rhs] else mkAppM ``LE.le #[lhs, rhs]
-      match env.nctx?, env.ictx?, env.dctx?, env.cctx? with
-      | some nc, _, _, _ => nc.assembleInfeasibleProof rows mults vars goalType
-      | _, some ic, _, _ => ic.assembleInfeasibleProof rows mults vars goalType atoms
-      | _, _, some dc, _ => dc.assembleInfeasibleProof rows mults vars goalType atoms
-      | _, _, _, none    => assembleInfeasibleProofRat rows strict mults vars lhs rhs atoms
-      | _, _, _, some c  => c.assembleInfeasibleProof rows mults vars goalType atoms
+      env.ops.assembleInfeasible rows mults vars goalType atoms
   | s =>
       throwError "lp: solver outcome was unchecked: {repr s}"
 
@@ -414,23 +393,14 @@ def solveAtomic (g : MVarId) : TacticM Unit := do
         let proof ← proveEntailed rows true st.vars lhsExpr rhsExpr atoms
         g.assign proof
     | .eq =>
-        -- Both `≤` directions share one `EntailEnv` (goal parse, carrier contexts,
+        -- Both `≤` directions share one `EntailEnv` (goal parse, carrier ops,
         -- nonneg-row augmentation); only the LP solve and assembly run per direction.
         let env ← mkEntailEnv rows st.vars lhsExpr rhsExpr atoms
         let h₁ ← proveEntailedCore env false
         let h₂ ← proveEntailedCore env false (swap := true)
-        -- Carrier-native antisymmetry: `Field.le_antisymm` still *requires* a `Field`
-        -- instance (its `omit` only drops it from the proof, not the signature), so `Int`
-        -- must use `IntC.le_antisymm`. No `Field.*` lemma touches the `Int` path.
-        let proof ←
-          if ← isDefEq carrier (mkConst ``Int) then
-            mkAppM ``IntC.le_antisymm #[h₁, h₂]
-          else if ← isDefEq carrier (mkConst ``Dyadic) then
-            mkAppM ``DyadicC.le_antisymm #[h₁, h₂]
-          else if ← isDefEq carrier (mkConst ``Nat) then
-            mkAppM ``NatC.le_antisymm #[h₁, h₂]
-          else
-            mkAppM ``Field.le_antisymm #[h₁, h₂]
+        -- Carrier-native antisymmetry (e.g. `Field.le_antisymm` still *requires* a
+        -- `Field` instance `Int` lacks, so the dispatch matters).
+        let proof ← env.ops.leAntisymm h₁ h₂
         g.assign proof
 
 end LP.Tactic.LP.Internal

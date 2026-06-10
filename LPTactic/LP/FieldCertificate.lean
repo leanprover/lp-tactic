@@ -219,19 +219,6 @@ def CCtx.buildWeightedSum (c : CCtx) (entries : Array (Rat × Expr × Expr × Op
     sumStrict := newStrict
   return (sumExpr, sumProof, sumStrict)
 
-/-- Build the weighted-sum entries; include a strict row's `term < 0` proof (`onlyStrict`
-gates whether strictness is wanted — `true` for strict goals / infeasibility). -/
-def collectEntries (rows : Array Row) (mults : Array Rat) (wantStrict : Bool) :
-    MetaM (Array (Rat × Expr × Expr × Option Expr)) := do
-  let mut entries : Array (Rat × Expr × Expr × Option Expr) := #[]
-  for h : i in [0:rows.size] do
-    let lam := mults[i]!
-    if lam ≠ 0 then
-      let sp? ← if wantStrict && rows[i].strict then pure (some (← rows[i].strictProof))
-                else pure none
-      entries := entries.push (lam, ← rows[i].term, ← rows[i].proof, sp?)
-  return entries
-
 /-- Optimal-branch certificate: `Σ λᵢ·rowᵢ ≤ 0` + `(rhs-lhs)+s = c` ⇒ `lhs ≤ rhs` (or `<`). -/
 def CCtx.assembleLeProof (c : CCtx) (rows : Array Row) (strict : Bool)
     (objLin : LinExpr) (mults : Array Rat) (vars : Array FVarId) (lhs rhs : Expr)

@@ -44,6 +44,21 @@ def registerBackend (b : LPBackend) : IO Unit := do
   if alreadyExists then
     throw <| IO.userError s!"lp: backend '{b.name}' is already registered"
 
+/-- Build an `LPBackend` and register it in one step — the `initialize` ceremony every
+    backend package repeats:
+
+    ```
+    initialize registerStaticBackend "soplex-json" 50 solveExact probe
+    ```
+
+    `probe` defaults to always-usable; see `LPBackend.defaultPriority` for the
+    priority bands. -/
+def registerStaticBackend (name : String) (defaultPriority : Nat)
+    (solveExact : {m n : Nat} → Options → Problem m n →
+      IO (Except SolveError (Solution m n)))
+    (probe : IO (Except String Unit) := pure (.ok ())) : IO Unit :=
+  registerBackend { name, defaultPriority, solveExact, probe }
+
 /-- Remove a backend by name. No-op if no backend is registered under
     that name.
 
