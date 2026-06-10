@@ -34,6 +34,17 @@ example (x : Rat) : ((1 : Rat) / 2 + 1 / 2) * x ≤ x + 1 := by lp
 
 example (x : Rat) : x / (3 - 1 : Rat) ≤ x / 2 + 1 := by lp
 
+/-! ## Wrapped compound scalars the parser reads through `whnfR`/`fvarLetValue?`:
+    a `let`-bound fvar, a `let` expression, and a reducible abbrev. -/
+
+example (x : Rat) : let k : Rat := 2 - 1; k * x ≤ x + 1 := by lp
+example (x : Rat) : (let k : Rat := 2 - 1; k) * x ≤ x + 1 := by lp
+
+abbrev kRat : Rat := 2 - 1
+example (x : Rat) : kRat * x ≤ x + 1 := by lp
+
+example (x : Rat) : let d : Rat := 3 - 1; x / d ≤ x / 2 + 1 := by lp
+
 /-! ## Regressions: nonlinear products (no closed-scalar side) still atomize. -/
 
 example (x y : Rat) : x * y ≤ x * y + 1 := by lp

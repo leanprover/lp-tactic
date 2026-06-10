@@ -366,10 +366,21 @@ so this stays off the quick-scalar hot path — it only runs where the previous
 behavior was to atomize, and backtracks to that on failure. -/
 partial def normalizeScalar? (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
     MetaM (Option (Rat × Expr)) := do
+  -- A let-bound fvar wrapping a compound scalar (which the parser reads through
+  -- `fvarLetValue?`): bridge the value, transport back to `e` by defeq (zeta-delta).
+  if let .fvar id := e then
+    let some v ← fvarLetValue? id | return none
+    let some (r, pf) ← m.normalizeScalar? vidx v | return none
+    return some (r, ← mkExpectedTypeHint pf (← mkEq e (m.mkLit r)))
   let s ← saveState
   try
-    let (L, pf, _) ← m.normalizeR vidx e
+    -- Mirror the parser's preprocessing: `parseScalar?` reduces with `whnfR` before
+    -- recursing, so a reducibly-wrapped compound scalar (a `@[reducible]` abbrev, a
+    -- `let` expression) is accepted identically; transport back to `e` by defeq.
+    let eU ← withReducible <| whnfR e
+    let (L, pf, rL) ← m.normalizeR vidx eU
     if L.coeffs.isEmpty then
+      let pf ← if eU == e then pure pf else mkExpectedTypeHint pf (← mkEq e rL)
       return some (L.const, pf)
     s.restore
     return none
