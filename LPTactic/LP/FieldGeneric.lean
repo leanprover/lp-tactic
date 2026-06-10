@@ -194,6 +194,10 @@ theorem mul_congr_eq_r (k a A : α) (e : a = A) : k * a = k * A := by subst e; r
 
 theorem mul_congr_eq_l (a A k : α) (e : a = A) : a * k = A * k := by subst e; rfl
 
+/-- Divisor congruence: rewrite a compound closed divisor to its literal before the
+`div_eq_inv_mul` step. Args explicit to match `applyLemma`. -/
+theorem div_congr_eq_r (a b B : α) (e : b = B) : a / b = a / B := by subst e; rfl
+
 theorem neg_congr_eq (a A : α) (e : a = A) : -a = -A := by subst e; rfl
 
 theorem sub_to_add_neg (a b : α) : a - b = a + (-b) := AddCommGroup.sub_eq_add_neg a b

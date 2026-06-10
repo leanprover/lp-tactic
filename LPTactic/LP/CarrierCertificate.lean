@@ -11,7 +11,10 @@ The structural walk (`normalizeR`/`proveMerge`/`proveSmul`/`proveNeg`/`render`/s
 shared: the thin per-carrier assembly (clearing/closers/dispatch) stays explicit in the
 carrier modules so each carrier's dispatch remains readable on its own. No tactic calls
 on the hot path; scalars are recognized with `quickScalarLit?`, never the O(N²)
-recursive `parseScalar?`.
+recursive `parseScalar?`. Compound closed scalars in coefficient/divisor position
+(`(2 - 1) * x`), which `quickScalarLit?` deliberately rejects but the parser's
+`parseScalar?` folds, are bridged off the hot path by `normalizeScalar?`: fully
+normalize the side, accept iff it closes to a constant.
 -/
 module
 public meta import LPTactic.LP.Certificate
@@ -215,6 +218,8 @@ where
       return ({ restL with coeffs := #[(v, mVal)] ++ restL.coeffs }, pf,
         m.mkAdd (m.mkMul mE xE) resPrev)
 
+mutual
+
 /-- Structural normalizer: `(L, pf : e = ⟦L⟧, ⟦L⟧)`. -/
 partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
     MetaM (LinExpr × Expr × Expr) := do
@@ -282,17 +287,15 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
       | .const ``HMul.hMul _ =>
           unless args.size == 6 do return ← m.normalizeAtom e
           let lhsE := args[4]!; let rhsE := args[5]!
-          if let some kVal ← m.scalarLit? lhsE then
+          -- Scalar on the left; `hKEq : lhsE = ⟦kVal⟧`.
+          let smulL (kVal : Rat) (hKEq : Expr) : MetaM (LinExpr × Expr × Expr) := do
+            let coefE := m.mkLit kVal
             if kVal != 0 && rhsE.isFVar then
               let L : LinExpr := {coeffs := #[(rhsE.fvarId!, kVal)]}
-              let coefE := m.mkLit kVal
-              let hKEq ← m.proveLitEq lhsE kVal
               let step1 := m.applyLemma `mul_congr_eq_l #[lhsE, coefE, rhsE, hKEq]
               let rL := m.render L
               let step2 := m.applyLemma `mul_atom_norm #[coefE, rhsE]
               return (L, m.mkEqTrans e (m.mkMul coefE rhsE) rL step1 step2, rL)
-            let coefE := m.mkLit kVal
-            let hKEq ← m.proveLitEq lhsE kVal
             let (Lr, pr, rLr) ← m.normalizeR vidx rhsE
             let (L, ps, rL) ← m.proveSmul coefE kVal Lr
             let step1 := m.applyLemma `mul_congr_eq_l #[lhsE, coefE, rhsE, hKEq]
@@ -300,9 +303,9 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
             let mid1 := m.mkMul coefE rhsE
             let mid2 := m.mkMul coefE rLr
             return (L, m.mkEqTrans e mid1 rL step1 (m.mkEqTrans mid1 mid2 rL stepR ps), rL)
-          else if let some kVal ← m.scalarLit? rhsE then
+          -- Scalar on the right; `hKEq : rhsE = ⟦kVal⟧`.
+          let smulR (kVal : Rat) (hKEq : Expr) : MetaM (LinExpr × Expr × Expr) := do
             let coefE := m.mkLit kVal
-            let hKEq ← m.proveLitEq rhsE kVal
             let (Lr, pr, rLr) ← m.normalizeR vidx lhsE
             let (L, ps, rL) ← m.proveSmul coefE kVal Lr
             let stepRc := m.applyLemma `mul_congr_eq_r #[lhsE, rhsE, coefE, hKEq]
@@ -313,6 +316,18 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
             let m3 := m.mkMul coefE rLr
             return (L, m.mkEqTrans e m1 rL stepRc
               (m.mkEqTrans m1 m2 rL mulComm (m.mkEqTrans m2 m3 rL stepR ps)), rL)
+          -- Quick scalar recognition first (the hot path), then the compound
+          -- closed-scalar fallback (`(2 - 1) * x`, which the parser folded into the
+          -- coefficient rather than atomizing), then atomization — mirroring the
+          -- parser's precedence (`parseScalar?` on either side before `atomVar`).
+          if let some kVal ← m.scalarLit? lhsE then
+            smulL kVal (← m.proveLitEq lhsE kVal)
+          else if let some kVal ← m.scalarLit? rhsE then
+            smulR kVal (← m.proveLitEq rhsE kVal)
+          else if let some (kVal, hKEq) ← m.normalizeScalar? vidx lhsE then
+            smulL kVal hKEq
+          else if let some (kVal, hKEq) ← m.normalizeScalar? vidx rhsE then
+            smulR kVal hKEq
           else
             m.normalizeAtom e
       | .const ``HDiv.hDiv _ =>
@@ -328,8 +343,41 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
             let (L, pInner, rL) ← m.normalizeR vidx mulE
             let pDiv := m.applyLemma `div_eq_inv_mul #[dividend, divisor]
             return (L, m.mkEqTrans e mulE rL pDiv pInner, rL)
+          -- Compound closed divisor (`x / (3 - 1)`, which the parser folded): rewrite
+          -- the divisor to its literal via the normalization proof, then recurse into
+          -- the quick-scalar branch above.
+          if let some (cVal, hCEq) ← m.normalizeScalar? vidx divisor then
+            if cVal == 0 then
+              throwError "lp: division by the zero constant{indentExpr e}"
+            let cE := m.mkLit cVal
+            let eLit := mkApp e.appFn! cE  -- `dividend / ⟦cVal⟧`, same `HDiv` instance
+            let (L, pInner, rL) ← m.normalizeR vidx eLit
+            let pCongr := m.applyLemma `div_congr_eq_r #[dividend, divisor, cE, hCEq]
+            return (L, m.mkEqTrans e eLit rL pCongr pInner, rL)
           m.normalizeAtom e
       | _ => m.normalizeAtom e
+
+/-- Bridge a compound closed scalar that `scalarLit?` deliberately rejects
+(`quickScalarLit?` does not descend into `HAdd`/`HSub`, so `(2 - 1)` is not a quick
+literal even though the parser's recursive `parseScalar?` folds it): fully normalize
+`e` and accept iff no atoms survive, returning the constant `r` together with the
+normalization proof `e = ⟦r⟧` as the literal bridge. Callers try `scalarLit?` first,
+so this stays off the quick-scalar hot path — it only runs where the previous
+behavior was to atomize, and backtracks to that on failure. -/
+partial def normalizeScalar? (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
+    MetaM (Option (Rat × Expr)) := do
+  let s ← saveState
+  try
+    let (L, pf, _) ← m.normalizeR vidx e
+    if L.coeffs.isEmpty then
+      return some (L.const, pf)
+    s.restore
+    return none
+  catch _ =>
+    s.restore
+    return none
+
+end
 
 /-- Normalize `lhsId` and check it cancels to the constant `cVal` (as a `Rat`). -/
 def proveCertificateIdentity (m : CarrierMethods) (vars : Array FVarId) (lhsId : Expr)

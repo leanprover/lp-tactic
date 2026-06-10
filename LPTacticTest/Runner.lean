@@ -6,6 +6,7 @@
 
 import LPTacticTest.Registry
 import LPTacticTest.Issue5
+import LPTacticTest.Issue27
 
 def main : IO UInt32 :=
   LPTacticTest.Registry.main
