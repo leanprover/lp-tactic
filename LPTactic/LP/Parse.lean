@@ -235,58 +235,88 @@ def atomVar (e : Expr) : ParseM (Option FVarId) := do
   addVar fv
   return some fv
 
-/-- At a parse dead-end, atomize the (original, pre-`whnf`) term if atomization is on,
-else fail with `msg`. -/
-def atomOrThrow (e : Expr) (msg : MessageData) : ParseM LinExpr := do
+/-- `FVarId`-keyed accumulator threaded through `parseInto`. Coefficients accumulate
+in a hash map (O(1) per term) instead of merging intermediate `LinExpr`s, which
+rescanned the accumulated coefficient array per incoming term — an O(N²) pattern on
+dense rows. `order` records first occurrences so `toLinExpr` is deterministic and
+matches the old left-to-right coefficient order. -/
+structure LinAcc where
+  const : Rat := 0
+  coeffs : Std.HashMap FVarId Rat := {}
+  order : Array FVarId := #[]
+
+def LinAcc.addCoeff (acc : LinAcc) (v : FVarId) (k : Rat) : LinAcc :=
+  match acc.coeffs[v]? with
+  | some c => { acc with coeffs := acc.coeffs.insert v (c + k) }
+  | none => { acc with coeffs := acc.coeffs.insert v k, order := acc.order.push v }
+
+/-- Densify in first-occurrence order, dropping coefficients that cancelled to zero
+(matching the old `addCoeff` merge semantics). -/
+def LinAcc.toLinExpr (acc : LinAcc) : LinExpr := Id.run do
+  let mut coeffs : Array (FVarId × Rat) := Array.mkEmpty acc.order.size
+  for v in acc.order do
+    let c := acc.coeffs.getD v 0
+    if c != 0 then coeffs := coeffs.push (v, c)
+  return { const := acc.const, coeffs }
+
+/-- At a parse dead-end, atomize the (original, pre-`whnf`) term if atomization is on
+— contributing `k * atom` to the accumulator — else fail with `msg`. -/
+def atomIntoOrThrow (acc : LinAcc) (k : Rat) (e : Expr) (msg : MessageData) :
+    ParseM LinAcc := do
   if let some fv ← atomVar e then
-    return { coeffs := #[(fv, 1)] }
+    return acc.addCoeff fv k
   throwError msg
 
-partial def parseExpr (e : Expr) : ParseM LinExpr := do
+/-- Accumulating affine parser: add `k * e` into `acc` in a single pass over the
+syntax tree. The scalar multiplier `k` threads through `-`/`neg`/scalar-`*`/`/ c`
+nodes, so no intermediate per-subtree `LinExpr`s are built or merged. -/
+partial def parseInto (caps : ScalarCaps) (acc : LinAcc) (k : Rat) (e : Expr) :
+    ParseM LinAcc := do
   let eOrig := e
-  let caps ← scalarCapsFor (← get).carrier
   if let some v ← parseScalar? caps e then
-    return { const := v }
+    return { acc with const := acc.const + k * v }
   let e ← withReducible <| whnfR e
   if let some v ← parseScalar? caps e then
-    return { const := v }
+    return { acc with const := acc.const + k * v }
   match e with
   | .fvar id =>
       if let some value ← fvarLetValue? id then
         if let some v ← parseScalar? caps value then
-          return { const := v }
+          return { acc with const := acc.const + k * v }
       let ty ← inferType e
       unless ← isDefEq ty (← get).carrier do
         throwError "lp: expected a {(← get).carrier} expression, found{indentExpr e}"
       addVar id
-      return { coeffs := #[(id, 1)] }
+      return acc.addCoeff id k
   | _ =>
       let fn := e.getAppFn
       let args := e.getAppArgs
       match fn with
       | .const ``HAdd.hAdd _ =>
           if args.size == 6 then
-            return (← parseExpr args[4]!).add (← parseExpr args[5]!)
+            return ← parseInto caps (← parseInto caps acc k args[4]!) k args[5]!
       | .const ``HSub.hSub _ =>
           -- `parseScalar?` above already rejects `Nat` subtraction; ring carriers
           -- (`Int`/`Dyadic`/field) reach here and subtract exactly.
           if args.size == 6 then
-            return (← parseExpr args[4]!).sub (← parseExpr args[5]!)
+            return ← parseInto caps (← parseInto caps acc k args[4]!) (-k) args[5]!
       | .const ``Neg.neg _ =>
           if args.size == 3 then
-            return (← parseExpr args[2]!).neg
+            return ← parseInto caps acc (-k) args[2]!
       | .const ``OfNat.ofNat _ =>
           if let some v ← parseScalar? caps e then
-            return { const := v }
+            return { acc with const := acc.const + k * v }
       | .const ``HMul.hMul _ =>
           if args.size == 6 then
             let lhs := args[4]!
             let rhs := args[5]!
+            -- A zero scalar still parses the other side (type checks, registers its
+            -- variables) and contributes zero coefficients, as the old `.smul 0` did.
             if let some c ← parseScalar? caps lhs then
-              return (← parseExpr rhs).smul c
+              return ← parseInto caps acc (k * c) rhs
             if let some c ← parseScalar? caps rhs then
-              return (← parseExpr lhs).smul c
-            return ← atomOrThrow eOrig "lp: nonlinear multiplication; one side of `*` must be a reducibly-closed scalar"
+              return ← parseInto caps acc (k * c) lhs
+            return ← atomIntoOrThrow acc k eOrig "lp: nonlinear multiplication; one side of `*` must be a reducibly-closed scalar"
       | .const ``HDiv.hDiv _ =>
           -- `e / c` with `c` a reducibly-closed nonzero scalar is the affine `(1/c) • e`
           -- (e.g. `x / 2`), kept linear rather than atomized. `Int`/`Nat` `/` is integer
@@ -296,11 +326,15 @@ partial def parseExpr (e : Expr) : ParseM LinExpr := do
             if let some c ← parseScalar? caps args[5]! then
               if c == 0 then
                 throwError "lp: division by the zero constant"
-              return (← parseExpr args[4]!).smul (1 / c)
-          return ← atomOrThrow eOrig "lp: division is outside the supported affine grammar"
+              return ← parseInto caps acc (k / c) args[4]!
+          return ← atomIntoOrThrow acc k eOrig "lp: division is outside the supported affine grammar"
       | _ => pure ()
       let carrier := (← get).carrier
-      atomOrThrow eOrig m!"lp: unsupported {carrier} expression{indentExpr e}"
+      atomIntoOrThrow acc k eOrig m!"lp: unsupported {carrier} expression{indentExpr e}"
+
+def parseExpr (e : Expr) : ParseM LinExpr := do
+  let caps ← scalarCapsFor (← get).carrier
+  return (← parseInto caps {} 1 e).toLinExpr
 
 /-- Is `e` a term of the goal's carrier type? Checked against the `carrier`
 in `ParseState` (set from the goal), so hypotheses over a different type are

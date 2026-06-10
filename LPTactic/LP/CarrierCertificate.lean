@@ -100,7 +100,7 @@ def precomputeSpine (m : CarrierMethods) (L : LinExpr) :
   return (heads, qs, suffix.reverse)
 
 /-- Linear ordered merge `⟦La⟧ + ⟦Lb⟧ = ⟦L⟧`; returns rendered `⟦L⟧` too (no re-render). -/
-partial def proveMerge (m : CarrierMethods) (vars : Array FVarId) (La Lb : LinExpr) :
+partial def proveMerge (m : CarrierMethods) (vidx : VarIdx) (La Lb : LinExpr) :
     MetaM (LinExpr × Expr × Expr) := do
   let (headA, qA, suffA) := m.precomputeSpine La
   let (headB, qB, suffB) := m.precomputeSpine Lb
@@ -131,8 +131,8 @@ where
         m.applyLemma `take_left #[h, taE, bE, resPrev, pRest], resE)
     let (vA, cA) := La.coeffs[i]!
     let (vB, cB) := Lb.coeffs[j]!
-    let iA := varIdx vars vA
-    let iB := varIdx vars vB
+    let iA := varIdx vidx vA
+    let iB := varIdx vidx vB
     if iA > iB then
       let h := headA[i]!
       let (restL, pRest, resPrev) ← go headA qA suffA headB qB suffB (i+1) j
@@ -216,7 +216,7 @@ where
         m.mkAdd (m.mkMul mE xE) resPrev)
 
 /-- Structural normalizer: `(L, pf : e = ⟦L⟧, ⟦L⟧)`. -/
-partial def normalizeR (m : CarrierMethods) (vars : Array FVarId) (e : Expr) :
+partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
     MetaM (LinExpr × Expr × Expr) := do
   if let some r ← m.scalarLit? e then
     return ({const := r}, ← m.proveLitEq e r, m.mkLit r)
@@ -230,17 +230,17 @@ partial def normalizeR (m : CarrierMethods) (vars : Array FVarId) (e : Expr) :
       match fn with
       | .const ``HAdd.hAdd _ =>
           let aE := args[4]!; let bE := args[5]!
-          let (La, pa, rA) ← m.normalizeR vars aE
-          let (Lb, pb, rB) ← m.normalizeR vars bE
+          let (La, pa, rA) ← m.normalizeR vidx aE
+          let (Lb, pb, rB) ← m.normalizeR vidx bE
           let step1 := m.applyLemma `add_congr_eq #[aE, rA, bE, rB, pa, pb]
-          let (L, pm, rL) ← m.proveMerge vars La Lb
+          let (L, pm, rL) ← m.proveMerge vidx La Lb
           return (L, m.mkEqTrans e (m.mkAdd rA rB) rL step1 pm, rL)
       | .const ``HSub.hSub _ =>
           let aE := args[4]!; let bE := args[5]!
-          let (La, pa, rA) ← m.normalizeR vars aE
-          let (Lb, pb, rB) ← m.normalizeR vars bE
+          let (La, pa, rA) ← m.normalizeR vidx aE
+          let (Lb, pb, rB) ← m.normalizeR vidx bE
           let (Lnb, pn, rLnb) ← m.proveNeg Lb
-          let (L, pm, rL) ← m.proveMerge vars La Lnb
+          let (L, pm, rL) ← m.proveMerge vidx La Lnb
           let negBExpr := m.mkNeg bE
           let negRB := m.mkNeg rB
           let midSub := m.mkAdd aE negBExpr
@@ -256,7 +256,7 @@ partial def normalizeR (m : CarrierMethods) (vars : Array FVarId) (e : Expr) :
           if aE.isFVar then
             let L : LinExpr := {coeffs := #[(aE.fvarId!, -1)]}
             return (L, m.applyLemma `neg_atom_norm #[aE], m.render L)
-          let (La, pa, rA) ← m.normalizeR vars aE
+          let (La, pa, rA) ← m.normalizeR vidx aE
           let (L, pn, rL) ← m.proveNeg La
           let step1 := m.applyLemma `neg_congr_eq #[aE, rA, pa]
           return (L, m.mkEqTrans e (m.mkNeg rA) rL step1 pn, rL)
@@ -273,7 +273,7 @@ partial def normalizeR (m : CarrierMethods) (vars : Array FVarId) (e : Expr) :
               return (L, m.mkEqTrans e (m.mkMul coefE rhsE) rL step1 step2, rL)
             let coefE := m.mkLit kVal
             let hKEq ← m.proveLitEq lhsE kVal
-            let (Lr, pr, rLr) ← m.normalizeR vars rhsE
+            let (Lr, pr, rLr) ← m.normalizeR vidx rhsE
             let (L, ps, rL) ← m.proveSmul coefE kVal Lr
             let step1 := m.applyLemma `mul_congr_eq_l #[lhsE, coefE, rhsE, hKEq]
             let stepR := m.applyLemma `mul_congr_eq_r #[coefE, rhsE, rLr, pr]
@@ -283,7 +283,7 @@ partial def normalizeR (m : CarrierMethods) (vars : Array FVarId) (e : Expr) :
           else if let some kVal ← m.scalarLit? rhsE then
             let coefE := m.mkLit kVal
             let hKEq ← m.proveLitEq rhsE kVal
-            let (Lr, pr, rLr) ← m.normalizeR vars lhsE
+            let (Lr, pr, rLr) ← m.normalizeR vidx lhsE
             let (L, ps, rL) ← m.proveSmul coefE kVal Lr
             let stepRc := m.applyLemma `mul_congr_eq_r #[lhsE, rhsE, coefE, hKEq]
             let mulComm ← mkAppM ``Lean.Grind.CommSemiring.mul_comm #[lhsE, coefE]
@@ -304,7 +304,7 @@ partial def normalizeR (m : CarrierMethods) (vars : Array FVarId) (e : Expr) :
               throwError "lp: division by the zero constant{indentExpr e}"
             let invE ← mkAppM ``Inv.inv #[divisor]
             let mulE := m.mkMul invE dividend
-            let (L, pInner, rL) ← m.normalizeR vars mulE
+            let (L, pInner, rL) ← m.normalizeR vidx mulE
             let pDiv := m.applyLemma `div_eq_inv_mul #[dividend, divisor]
             return (L, m.mkEqTrans e mulE rL pDiv pInner, rL)
           m.normalizeAtom e
@@ -313,7 +313,7 @@ partial def normalizeR (m : CarrierMethods) (vars : Array FVarId) (e : Expr) :
 /-- Normalize `lhsId` and check it cancels to the constant `cVal` (as a `Rat`). -/
 def proveCertificateIdentity (m : CarrierMethods) (vars : Array FVarId) (lhsId : Expr)
     (cVal : Rat) : MetaM Expr := do
-  let (L, pfNorm, _) ← m.normalizeR vars lhsId
+  let (L, pfNorm, _) ← m.normalizeR (mkVarIdx vars) lhsId
   unless L.const == cVal do
     throwError "lp: normalized constant {L.const} ≠ residual {cVal}"
   unless L.coeffs.isEmpty do

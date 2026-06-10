@@ -22,7 +22,8 @@ def solveWitnessLP (lpRows : Array LinExpr) (binders : Array FVarId) :
   if lpRows.size = 0 then
     -- No constraints: any witness works; pick `0` for each binder.
     return .ok (Array.replicate binders.size (0 : Rat))
-  let rowDense := lpRows.map (·.toDense binders)
+  let bIdx := mkVarIdx binders
+  let rowDense := lpRows.map (·.toDense bIdx)
   let rowConsts := lpRows.map (·.const)
   let objCoeffs := Array.replicate binders.size (0 : Rat)
   have hSize : rowDense.size = rowConsts.size := by
@@ -119,9 +120,10 @@ def runSupLP (yBinders : Array FVarId) (guardsLe : Array LinExpr)
   -- still vacuously true, and dropping the residual row is necessary:
   -- otherwise the strengthened witness LP would carry a fake row
   -- `α(x) + γ + β.const ≤ 0` that may rule out an otherwise good witness.
-  let rowDense := guardsLe.map (·.toDense yBinders)
+  let yIdx := mkVarIdx yBinders
+  let rowDense := guardsLe.map (·.toDense yIdx)
   let rowConsts := guardsLe.map (·.const)
-  let objCoeffs := β.toDense yBinders
+  let objCoeffs := β.toDense yIdx
   have hSize : rowDense.size = rowConsts.size := by
     simp [rowDense, rowConsts]
   let p := buildProblem rowDense rowConsts objCoeffs 0 yBinders.size hSize
@@ -138,7 +140,7 @@ def runSupLP (yBinders : Array FVarId) (guardsLe : Array LinExpr)
   | .optimal =>
       let some pr := sol.certificate.primal
         | throwError "lp(∀): sup-LP reported optimal without a primal certificate"
-      let M := β.evalAt yBinders pr.toArray
+      let M := β.evalAt yIdx pr.toArray
       return .bounded M
   | .infeasible =>
       return .vacuous
@@ -340,11 +342,12 @@ def runBendersSubproblem (u : BendersUniversal)
   -- bounded), and a constant-`bodyY` subproblem with no constraints can
   -- still arrive via constant guards — let SoPlex handle it normally.
   let nRows := u.guardY.size
+  let xIdx := mkVarIdx xBinders
   let mut rowLins : Array LinExpr := Array.mkEmpty nRows
   for h : i in [0:nRows] do
     let gy := u.guardY[i]
     let gx := u.guardX[i]!
-    let c := gx.evalAt xBinders xStar
+    let c := gx.evalAt xIdx xStar
     rowLins := rowLins.push { const := gy.const + c, coeffs := gy.coeffs }
   if u.yBinders.isEmpty then
     -- Degenerate: no y-variables. `bodyY` is then constant and the
@@ -360,9 +363,10 @@ def runBendersSubproblem (u : BendersUniversal)
       return .bounded u.bodyY.const #[]
     return .unboundedFail
       "lp (Benders): subproblem has no guards but `p · y` is non-constant; sup is +∞."
-  let rowDense := rowLins.map (·.toDense u.yBinders)
+  let yIdx := mkVarIdx u.yBinders
+  let rowDense := rowLins.map (·.toDense yIdx)
   let rowConsts := rowLins.map (·.const)
-  let objCoeffs := u.bodyY.toDense u.yBinders
+  let objCoeffs := u.bodyY.toDense yIdx
   have hSize : rowDense.size = rowConsts.size := by
     simp [rowDense, rowConsts]
   let p := buildProblem rowDense rowConsts objCoeffs 0 u.yBinders.size hSize
@@ -382,7 +386,7 @@ def runBendersSubproblem (u : BendersUniversal)
       let some d := sol.certificate.dual
         | return .uncheckedFail "Benders subproblem reported optimal without a dual certificate"
       -- Recompute objective at primal; do not trust SoPlex's number.
-      let M := u.bodyY.evalAt u.yBinders pr.toArray
+      let M := u.bodyY.evalAt yIdx pr.toArray
       let lam := d.rowUpper.toArray
       -- Sanity: nonnegativity of multipliers (a maximize LP's row-upper
       -- duals must be ≥ 0; reject otherwise).
@@ -506,6 +510,7 @@ partial def runBendersLoop (xBinders : Array FVarId)
     MetaM (Except (Option String) (Array Rat)) := do
   let mut state : BendersState :=
     { masterRows := initialMaster, cutKeys := #[], triedCandidates := #[], iter := 0 }
+  let xIdx := mkVarIdx xBinders
   while state.iter < bendersMaxIter do
     state := { state with iter := state.iter + 1 }
     -- Solve the master LP.
@@ -541,7 +546,7 @@ partial def runBendersLoop (xBinders : Array FVarId)
       | .unboundedFail msg => return .error (some msg)
       | .uncheckedFail msg => return .error (some msg)
       | .bounded M lam =>
-          let bodyAtX := u.bodyX.evalAt xBinders xStar
+          let bodyAtX := u.bodyX.evalAt xIdx xStar
           if M + bodyAtX ≤ 0 then continue
           -- Violation: derive cut.
           let cut := computeBendersCut u lam

@@ -167,12 +167,24 @@ that gets fed to `decide` for the sign check and to
 `proveCertificateIdentity` for the algebraic identity proof. -/
 def computeResidual (objLin : LinExpr) (rowLins : Array LinExpr)
     (mults : Array Rat) : LinExpr := Id.run do
-  let mut acc : LinExpr := objLin
+  -- Fused accumulation: one `FVarId`-keyed map over all nonzero multipliers,
+  -- instead of a `LinExpr.add` fold that rescans the accumulated coefficients
+  -- per row (`O(m · n²)` on dense problems). Coefficient order in the result is
+  -- irrelevant: callers only check closedness and read the constant.
+  let mut const := objLin.const
+  let mut acc : Std.HashMap FVarId Rat := .emptyWithCapacity (2 * objLin.coeffs.size)
+  for (v, c) in objLin.coeffs do
+    acc := acc.insert v (acc.getD v 0 + c)
   for h : i in [0:rowLins.size] do
     let lam := mults[i]!
     if lam ≠ 0 then
-      acc := acc.add (LinExpr.smul lam rowLins[i])
-  return acc
+      const := const + lam * rowLins[i].const
+      for (v, c) in rowLins[i].coeffs do
+        acc := acc.insert v (acc.getD v 0 + lam * c)
+  let mut coeffs : Array (FVarId × Rat) := Array.mkEmpty acc.size
+  for (v, c) in acc do
+    if c != 0 then coeffs := coeffs.push (v, c)
+  return { const, coeffs }
 
 def isLinExprClosed (e : LinExpr) : Bool :=
   e.coeffs.all (fun (_, c) => c == 0)
@@ -187,11 +199,13 @@ built from fixed-arity lemmas; the kernel only structurally typechecks
 the resulting term, reducing only closed `Int` literal arithmetic inside
 the `ratlit_*` side conditions. -/
 
-/-- Position of `v` in the global `vars` array. The caller guarantees
-membership; on lookup failure we return `vars.size` so the result is
-still a valid total order (the unknown atom sorts last). -/
-def varIdx (vars : Array FVarId) (v : FVarId) : Nat :=
-  vars.idxOf? v |>.getD vars.size
+/-- Position of `v` in the invocation's fixed variable order, looked up in the
+`mkVarIdx` map built once per invocation (the old `vars.idxOf?` rescanned the
+array inside every merge comparison). The caller guarantees membership; on
+lookup failure we return `vidx.size` so the result is still a valid total
+order (the unknown atom sorts last). -/
+def varIdx (vidx : VarIdx) (v : FVarId) : Nat :=
+  vidx.getD v vidx.size
 
 /-- Render a sorted `LinExpr` into the canonical right-nested `Rat`
 Expr `c₀*x₀ + (c₁*x₁ + (… + (cₙ₋₁*xₙ₋₁ + r) …))`. -/
@@ -341,10 +355,10 @@ def precomputeSpine (L : LinExpr) (atoms : AtomTable := {}) :
 /-- The linear ordered merge primitive — the one core proof primitive.
 
 Given two `LinExpr`s `La` and `Lb` whose `coeffs` are sorted ascending by
-`varIdx vars`, produce the sorted merge `L = La ⊕ Lb` together with a
+`varIdx vidx`, produce the sorted merge `L = La ⊕ Lb` together with a
 proof `pf : ⟦La⟧ + ⟦Lb⟧ = ⟦L⟧`. Linear in `|La.coeffs| + |Lb.coeffs|`,
 with all suffix Exprs precomputed and shared by reference. -/
-partial def proveMerge (vars : Array FVarId) (La Lb : LinExpr) (atoms : AtomTable := {}) :
+partial def proveMerge (vidx : VarIdx) (La Lb : LinExpr) (atoms : AtomTable := {}) :
     MetaM (LinExpr × Expr) := do
   let (headA, qA, suffA) ← precomputeSpine La atoms
   let (headB, qB, suffB) ← precomputeSpine Lb atoms
@@ -385,8 +399,8 @@ where
       return ({ restL with coeffs := #[(vA, cA)] ++ restL.coeffs }, pf, resE)
     let (vA, cA) := La.coeffs[i]!
     let (vB, cB) := Lb.coeffs[j]!
-    let iA := varIdx vars vA
-    let iB := varIdx vars vB
+    let iA := varIdx vidx vA
+    let iB := varIdx vidx vB
     -- Descending-varIdx convention: coeffs[0] is the largest varIdx, which
     -- the render places outermost. The overall next-outermost head comes
     -- from whichever side has the strictly larger varIdx at its current
@@ -518,7 +532,7 @@ partial def proveNegR (La : LinExpr) (atoms : AtomTable := {}) : MetaM (LinExpr 
 `pf : e = rL` and `rL = ⟦L⟧`. The rendered `rL` is threaded through the
 recursion so the proof terms reference shared spine Exprs instead of
 re-rendering them at every syntax node. -/
-partial def normalizeR (vars : Array FVarId) (e : Expr) (atoms : AtomTable := {}) :
+partial def normalizeR (vidx : VarIdx) (e : Expr) (atoms : AtomTable := {}) :
     MetaM (LinExpr × Expr × Expr) := do
   -- Quick scalar-literal check (no recursion through `HAdd`/etc.). The
   -- full recursive `parseScalar?` is far more expensive — calling it at
@@ -547,8 +561,8 @@ partial def normalizeR (vars : Array FVarId) (e : Expr) (atoms : AtomTable := {}
             throwError "lp(normalize): malformed HAdd in{indentExpr eW}"
           let aE := args[4]!
           let bE := args[5]!
-          let (La, pa, rA) ← normalizeR vars aE atoms
-          let (Lb, pb, rB) ← normalizeR vars bE atoms
+          let (La, pa, rA) ← normalizeR vidx aE atoms
+          let (Lb, pb, rB) ← normalizeR vidx bE atoms
           let step1 := mkAppN (mkConst ``add_congr_eq) #[aE, rA, bE, rB, pa, pb]
           if Lb.coeffs.size == 1 && Lb.const == 0 then
             let (vB, cB) := Lb.coeffs[0]!
@@ -563,7 +577,7 @@ partial def normalizeR (vars : Array FVarId) (e : Expr) (atoms : AtomTable := {}
               let pf := mkEqTransFast ratType eW rAddRB rL step1 pm
               let L : LinExpr := { La with coeffs := #[(vB, cB)] ++ La.coeffs }
               return (L, pf, rL)
-          let (L, pm) ← proveMerge vars La Lb atoms
+          let (L, pm) ← proveMerge vidx La Lb atoms
           let rL ← render L atoms
           let rAddRB ← mkRatAdd rA rB
           let pf := mkEqTransFast ratType eW rAddRB rL step1 pm
@@ -573,10 +587,10 @@ partial def normalizeR (vars : Array FVarId) (e : Expr) (atoms : AtomTable := {}
             throwError "lp(normalize): malformed HSub in{indentExpr eW}"
           let aE := args[4]!
           let bE := args[5]!
-          let (La, pa, rA) ← normalizeR vars aE atoms
-          let (Lb, pb, rB) ← normalizeR vars bE atoms
+          let (La, pa, rA) ← normalizeR vidx aE atoms
+          let (Lb, pb, rB) ← normalizeR vidx bE atoms
           let (Lnb, pn, rLnb) ← proveNegR Lb atoms
-          let (L, pm) ← proveMerge vars La Lnb atoms
+          let (L, pm) ← proveMerge vidx La Lnb atoms
           let rL ← render L atoms
           let negBExpr := mkRatNeg bE
           let negRB := mkRatNeg rB
@@ -600,7 +614,7 @@ partial def normalizeR (vars : Array FVarId) (e : Expr) (atoms : AtomTable := {}
             let pf := mkApp (mkConst ``neg_atom_norm) aE
             let rL ← render L atoms
             return (L, pf, rL)
-          let (La, pa, rA) ← normalizeR vars aE atoms
+          let (La, pa, rA) ← normalizeR vidx aE atoms
           let (L, pn, rL) ← proveNegR La atoms
           let negRA := mkRatNeg rA
           let step1 := mkAppN (mkConst ``neg_congr_eq) #[aE, rA, pa]
@@ -619,7 +633,7 @@ partial def normalizeR (vars : Array FVarId) (e : Expr) (atoms : AtomTable := {}
               let pf := mkAppN (mkConst ``mul_atom_norm) #[lhsE, rhsE]
               let rL ← render L atoms
               return (L, pf, rL)
-            let (Lr, pr, rLr) ← normalizeR vars rhsE atoms
+            let (Lr, pr, rLr) ← normalizeR vidx rhsE atoms
             if kVal = 0 then
               let L : LinExpr := {}
               let zeroE ← mkRatLit 0
@@ -633,7 +647,7 @@ partial def normalizeR (vars : Array FVarId) (e : Expr) (atoms : AtomTable := {}
             let pf := mkEqTransFast ratType eW kMulRLr rL step1 ps
             return (L, pf, rL)
           else if let some kVal ← quickScalarLit? rhsE then
-            let (Lr, pr, rLr) ← normalizeR vars lhsE atoms
+            let (Lr, pr, rLr) ← normalizeR vidx lhsE atoms
             let kE := rhsE
             if kVal = 0 then
               let L : LinExpr := {}
@@ -664,7 +678,7 @@ partial def normalizeR (vars : Array FVarId) (e : Expr) (atoms : AtomTable := {}
               throwError "lp(normalize): division by the zero constant{indentExpr eW}"
             let invE ← mkAppM ``Inv.inv #[divisor]
             let mulE ← mkRatMul invE dividend
-            let (L, pInner, rL) ← normalizeR vars mulE atoms
+            let (L, pInner, rL) ← normalizeR vidx mulE atoms
             let pDiv ← mkAppM ``rat_div_eq_inv_mul #[dividend, divisor]
             let pf := mkEqTransFast ratType eW mulE rL pDiv pInner
             return (L, pf, rL)
@@ -680,7 +694,7 @@ no surviving coefficients and the constant matches `cVal` — closing by a
 `rfl` step at the rendered constant. -/
 def proveCertificateIdentity (vars : Array FVarId) (lhsId : Expr)
     (cVal : Rat) (atoms : AtomTable := {}) : MetaM Expr := do
-  let (L, pfNorm, _rL) ← normalizeR vars lhsId atoms
+  let (L, pfNorm, _rL) ← normalizeR (mkVarIdx vars) lhsId atoms
   unless L.const == cVal do
     throwError "lp(closeIdentity): normalized constant {L.const} does not match expected residual {cVal}"
   unless L.coeffs.isEmpty do
