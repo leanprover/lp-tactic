@@ -400,29 +400,41 @@ def mkVarIdx (vars : Array FVarId) : VarIdx := Id.run do
     m := m.insert vars[i] i
   return m
 
-/-- Merge two coefficient lists in one map-indexed pass: `a`'s entries keep their
-positions (updated in place), `b`'s new variables append in `b`-order, and entries
-that cancel to zero are dropped — `O(|a| + |b|)` instead of the per-coefficient
-rescan `O(|a| · |b|)`. -/
+/-- Merge two coefficient lists: `a`'s entries keep their positions (updated in
+place), `b`'s new variables append in `b`-order, and entries that cancel to zero
+are dropped. A small `b` merges by direct scan (in-place `set!`/`push`, no
+rebuild); a large `b` goes through one map-indexed pass — `O(|a| + |b|)` instead
+of the per-coefficient rescan `O(|a| · |b|)`. -/
 def LinExpr.add (a b : LinExpr) : LinExpr := Id.run do
   let const := a.const + b.const
   if b.coeffs.isEmpty then return { a with const }
   if a.coeffs.isEmpty then return { b with const }
-  let mut idx : Std.HashMap FVarId Nat := .emptyWithCapacity a.coeffs.size
-  for h : i in [0:a.coeffs.size] do
-    idx := idx.insert a.coeffs[i].1 i
   let mut out := a.coeffs
   let mut cancelled := false
-  for (v, c) in b.coeffs do
-    if c != 0 then
-      match idx[v]? with
-      | some i =>
-          let c' := out[i]!.2 + c
-          out := out.set! i (v, c')
-          if c' == 0 then cancelled := true
-      | none =>
-          idx := idx.insert v out.size
-          out := out.push (v, c)
+  if b.coeffs.size ≤ 4 then
+    for (v, c) in b.coeffs do
+      if c != 0 then
+        match out.findIdx? (·.1 == v) with
+        | some i =>
+            let c' := out[i]!.2 + c
+            out := out.set! i (v, c')
+            if c' == 0 then cancelled := true
+        | none =>
+            out := out.push (v, c)
+  else
+    let mut idx : Std.HashMap FVarId Nat := .emptyWithCapacity a.coeffs.size
+    for h : i in [0:a.coeffs.size] do
+      idx := idx.insert a.coeffs[i].1 i
+    for (v, c) in b.coeffs do
+      if c != 0 then
+        match idx[v]? with
+        | some i =>
+            let c' := out[i]!.2 + c
+            out := out.set! i (v, c')
+            if c' == 0 then cancelled := true
+        | none =>
+            idx := idx.insert v out.size
+            out := out.push (v, c)
   return { const, coeffs := if cancelled then out.filter (·.2 != 0) else out }
 
 def LinExpr.neg (a : LinExpr) : LinExpr :=
