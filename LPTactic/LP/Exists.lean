@@ -225,7 +225,8 @@ def tryHypsInconsistent (fctx : FrontendCtx) (rows : Array Row) (vars : Array FV
         try return some (← fctx.mkContradiction rows mults vars goalType atoms)
         catch _ => pure ()
     return none
-  let rowDense := rows.map (·.expr.toDense vars)
+  let vidx := mkVarIdx vars
+  let rowDense := rows.map (·.expr.toDense vidx)
   let rowConsts := rows.map (·.expr.const)
   let objCoeffs := Array.replicate vars.size (0 : Rat)
   have hSize : rowDense.size = rowConsts.size := by

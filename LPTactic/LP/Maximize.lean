@@ -119,9 +119,10 @@ def runMaximize (g : MVarId) (hname : Name) (boundName : Option Name)
     let proof ← proveEntailed rows false vars exprE NE
     injectMaxBound g hname boundName carrier exprE NE proof
     return
-  let rowDense := rows.map (·.expr.toDense vars)
+  let vidx := mkVarIdx vars
+  let rowDense := rows.map (·.expr.toDense vidx)
   let rowConsts := rows.map (·.expr.const)
-  let objCoeffs := exprLin.toDense vars
+  let objCoeffs := exprLin.toDense vidx
   have hSize : rowDense.size = rowConsts.size := by
     simp [rowDense, rowConsts]
   let p := buildProblem rowDense rowConsts objCoeffs exprLin.const vars.size hSize
@@ -149,7 +150,7 @@ def runMaximize (g : MVarId) (hname : Name) (boundName : Option Name)
       -- reported objective. `exprLin.evalAt` folds in the constant
       -- offset, so a `maximize 3 * x + 7` optimum is the full
       -- `3 * x* + 7`, not just `3 * x*`.
-      let N : Rat := exprLin.evalAt vars pr.toArray
+      let N : Rat := exprLin.evalAt vidx pr.toArray
       let NE ← fctx.mkNumeral N
       -- Build `proof : exprE ≤ NE` by reusing the atomic-goal
       -- entailment discharger. This re-solves an LP internally — a small redundant

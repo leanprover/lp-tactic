@@ -176,31 +176,37 @@ def castNonnegRows (vars : Array FVarId) (atoms : AtomTable)
       catch _ => pure ()
   return out
 
-def proveEntailed (rows : Array Row) (strict : Bool)
-    (vars : Array FVarId) (lhs rhs : Expr) (atoms : AtomTable := {}) : TacticM Expr := do
-  -- Objective: `rhs - lhs` as a `LinExpr`. Parse against the goal's carrier
-  -- (not the default `Rat`) so non-`Rat` atoms like `(x : ℝ)` are accepted.
+/-- Direction-independent setup shared by both directions of an `=` goal: the goal
+sides parsed once, the carrier contexts synthesized once, and the rows augmented once
+with the carrier's nonnegativity facts. An `=` goal proves both `≤` directions from
+one `EntailEnv` instead of redoing this work per direction. -/
+structure EntailEnv where
+  rows : Array Row
+  vars : Array FVarId
+  atoms : AtomTable
+  lhs : Expr
+  rhs : Expr
+  lhsLin : LinExpr
+  rhsLin : LinExpr
+  cctx? : Option Field.CCtx := none
+  ictx? : Option IntC.ICtx := none
+  dctx? : Option DyadicC.DCtx := none
+  nctx? : Option NatC.NCtx := none
+
+def mkEntailEnv (rows : Array Row) (vars : Array FVarId) (lhs rhs : Expr)
+    (atoms : AtomTable := {}) : TacticM EntailEnv := do
+  -- Parse the goal sides against the goal's carrier (not the default `Rat`) so
+  -- non-`Rat` atoms like `(x : ℝ)` are accepted.
   -- Reuse the hypothesis parse's atom table so a goal atom (`‖x‖`, `π`, …) maps to
   -- the *same* virtual LP variable the hypotheses used, keeping the certificate consistent.
+  -- The updated parse state is discarded: callers must already have registered the goal
+  -- sides' variables and atoms in `vars`/`atoms` (as `solveAtomic` does by parsing the
+  -- target before collecting hypotheses), so this reparse discovers nothing new.
   let carrier ← inferType lhs
-  let (objLin, _) ←
-    (do
-      let lhsLin ← parseExpr lhs
-      let rhsLin ← parseExpr rhs
-      pure (rhsLin.sub lhsLin)).run
+  let ((lhsLin, rhsLin), _) ←
+    (do pure ((← parseExpr lhs), (← parseExpr rhs))).run
         { vars := vars, carrier, allowAtoms := true
           atomToFVar := atoms.atomToFVar, fvarToAtom := atoms.fvarToAtom }
-  -- Short-circuit when the goal is purely a closed `Rat` comparison: no
-  -- rows are needed, no SoPlex call is needed, and the empty-sum direct
-  -- certificate is enough. The wider `isLinExprClosed objLin` case is
-  -- only safe when the residual constant has the right sign — otherwise
-  -- the rows may be inconsistent and the proper certificate routes
-  -- through SoPlex's infeasibility branch (vacuous-guard case from the
-  -- x-independent inner-`∀` path).
-  let canShortcut : Bool :=
-    vars.size = 0 ||
-    (isLinExprClosed objLin &&
-     (if strict then decide (0 < objLin.const) else decide (0 ≤ objLin.const)))
   -- Computable carriers take fast paths that render coefficients as native
   -- kernel-reducible literals (defeq to user literals, no `userLit = ofRat r`
   -- bridge and none of the field engine's ~20% overhead): `Rat` via the
@@ -255,8 +261,32 @@ def proveEntailed (rows : Array Row) (strict : Bool)
         -- the atom verbatim and the certificate identity stays consistent.
         mkExpectedTypeHint (← instantiateMVars proof) want
       pure (rows ++ (← castNonnegRows vars atoms subNonposName mkNonneg))
+  return { rows, vars, atoms, lhs, rhs, lhsLin, rhsLin, cctx?, ictx?, dctx?, nctx? }
+
+/-- Prove the entailed comparison from a prebuilt `EntailEnv`: `lhs ≤ rhs` (or
+`lhs < rhs` when `strict`), or the swapped direction `rhs ≤ lhs` when `swap` —
+the objective is the corresponding difference of the pre-parsed goal sides. -/
+def proveEntailedCore (env : EntailEnv) (strict : Bool) (swap : Bool := false) :
+    TacticM Expr := do
+  let rows := env.rows
+  let vars := env.vars
+  let atoms := env.atoms
+  let (lhs, rhs) := if swap then (env.rhs, env.lhs) else (env.lhs, env.rhs)
+  -- Objective: `rhs - lhs` as a `LinExpr`.
+  let objLin := if swap then env.lhsLin.sub env.rhsLin else env.rhsLin.sub env.lhsLin
+  -- Short-circuit when the goal is purely a closed `Rat` comparison: no
+  -- rows are needed, no SoPlex call is needed, and the empty-sum direct
+  -- certificate is enough. The wider `isLinExprClosed objLin` case is
+  -- only safe when the residual constant has the right sign — otherwise
+  -- the rows may be inconsistent and the proper certificate routes
+  -- through SoPlex's infeasibility branch (vacuous-guard case from the
+  -- x-independent inner-`∀` path).
+  let canShortcut : Bool :=
+    vars.size = 0 ||
+    (isLinExprClosed objLin &&
+     (if strict then decide (0 < objLin.const) else decide (0 ≤ objLin.const)))
   let assembleOptimal (mults : Array Rat) : TacticM Expr :=
-    match nctx?, ictx?, dctx?, cctx? with
+    match env.nctx?, env.ictx?, env.dctx?, env.cctx? with
     | some nc, _, _, _ => nc.assembleLeProof rows strict objLin mults vars lhs rhs
     | _, some ic, _, _ => ic.assembleLeProof rows strict objLin mults vars lhs rhs atoms
     | _, _, some dc, _ => dc.assembleLeProof rows strict objLin mults vars lhs rhs atoms
@@ -268,9 +298,10 @@ def proveEntailed (rows : Array Row) (strict : Bool)
   -- Numerical row data is only needed once we know a solver call is
   -- required; the closed-goal path above proves the goal with the empty
   -- weighted sum.
-  let rowDense := rows.map (·.expr.toDense vars)
+  let vidx := mkVarIdx vars
+  let rowDense := rows.map (·.expr.toDense vidx)
   let rowConsts := rows.map (·.expr.const)
-  let objCoeffs := objLin.toDense vars
+  let objCoeffs := objLin.toDense vidx
   let objConst := objLin.const
   -- Build the LP.
   have hSize : rowDense.size = rowConsts.size := by
@@ -335,7 +366,7 @@ def proveEntailed (rows : Array Row) (strict : Bool)
   | .infeasible =>
       let goalType ←
         if strict then mkAppM ``LT.lt #[lhs, rhs] else mkAppM ``LE.le #[lhs, rhs]
-      match nctx?, ictx?, dctx?, cctx? with
+      match env.nctx?, env.ictx?, env.dctx?, env.cctx? with
       | some nc, _, _, _ => nc.assembleInfeasibleProof rows mults vars goalType
       | _, some ic, _, _ => ic.assembleInfeasibleProof rows mults vars goalType atoms
       | _, _, some dc, _ => dc.assembleInfeasibleProof rows mults vars goalType atoms
@@ -343,6 +374,11 @@ def proveEntailed (rows : Array Row) (strict : Bool)
       | _, _, _, some c  => c.assembleInfeasibleProof rows mults vars goalType atoms
   | s =>
       throwError "lp: solver outcome was unchecked: {repr s}"
+
+def proveEntailed (rows : Array Row) (strict : Bool)
+    (vars : Array FVarId) (lhs rhs : Expr) (atoms : AtomTable := {}) : TacticM Expr := do
+  proveEntailedCore (← mkEntailEnv rows vars lhs rhs atoms) strict
+
 /-- The carrier type `α` of an atomic comparison goal `lhs op rhs` — the first
 explicit type argument of `LE`/`LT`/`GE`/`GT`/`Eq`. -/
 def relCarrier? (type : Expr) : Option Expr :=
@@ -378,8 +414,11 @@ def solveAtomic (g : MVarId) : TacticM Unit := do
         let proof ← proveEntailed rows true st.vars lhsExpr rhsExpr atoms
         g.assign proof
     | .eq =>
-        let h₁ ← proveEntailed rows false st.vars lhsExpr rhsExpr atoms
-        let h₂ ← proveEntailed rows false st.vars rhsExpr lhsExpr atoms
+        -- Both `≤` directions share one `EntailEnv` (goal parse, carrier contexts,
+        -- nonneg-row augmentation); only the LP solve and assembly run per direction.
+        let env ← mkEntailEnv rows st.vars lhsExpr rhsExpr atoms
+        let h₁ ← proveEntailedCore env false
+        let h₂ ← proveEntailedCore env false (swap := true)
         -- Carrier-native antisymmetry: `Field.le_antisymm` still *requires* a `Field`
         -- instance (its `omit` only drops it from the proof, not the signature), so `Int`
         -- must use `IntC.le_antisymm`. No `Field.*` lemma touches the `Int` path.

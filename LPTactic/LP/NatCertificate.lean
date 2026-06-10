@@ -104,8 +104,9 @@ def NCtx.buildWeightedSum (c : NCtx) (entries : Array (Nat × Expr × Expr × Ex
 
 /-- Prove `aExpr = bExpr` by normalizing both to the same sorted form. -/
 def NCtx.proveEq (c : NCtx) (vars : Array FVarId) (aExpr bExpr : Expr) : MetaM Expr := do
-  let (La, pa, _) ← c.m.normalizeR vars aExpr
-  let (Lb, pb, _) ← c.m.normalizeR vars bExpr
+  let vidx := mkVarIdx vars
+  let (La, pa, _) ← c.m.normalizeR vidx aExpr
+  let (Lb, pb, _) ← c.m.normalizeR vidx bExpr
   unless La.const == Lb.const && La.coeffs == Lb.coeffs do
     throwError "lp(nat): identity sides disagree after normalization"
   -- pa : aExpr = ⟦La⟧, pb : bExpr = ⟦La⟧  ⇒  aExpr = bExpr
