@@ -408,7 +408,9 @@ of the per-coefficient rescan `O(|a| · |b|)`. -/
 def LinExpr.add (a b : LinExpr) : LinExpr := Id.run do
   let const := a.const + b.const
   if b.coeffs.isEmpty then return { a with const }
-  if a.coeffs.isEmpty then return { b with const }
+  if a.coeffs.isEmpty then
+    -- Match the merge paths (and the old fold), which drop zero coefficients from `b`.
+    return { const, coeffs := if b.coeffs.any (·.2 == 0) then b.coeffs.filter (·.2 != 0) else b.coeffs }
   let mut out := a.coeffs
   let mut cancelled := false
   if b.coeffs.size ≤ 4 then

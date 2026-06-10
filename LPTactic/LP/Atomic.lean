@@ -199,6 +199,9 @@ def mkEntailEnv (rows : Array Row) (vars : Array FVarId) (lhs rhs : Expr)
   -- non-`Rat` atoms like `(x : ℝ)` are accepted.
   -- Reuse the hypothesis parse's atom table so a goal atom (`‖x‖`, `π`, …) maps to
   -- the *same* virtual LP variable the hypotheses used, keeping the certificate consistent.
+  -- The updated parse state is discarded: callers must already have registered the goal
+  -- sides' variables and atoms in `vars`/`atoms` (as `solveAtomic` does by parsing the
+  -- target before collecting hypotheses), so this reparse discovers nothing new.
   let carrier ← inferType lhs
   let ((lhsLin, rhsLin), _) ←
     (do pure ((← parseExpr lhs), (← parseExpr rhs))).run
