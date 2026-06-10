@@ -63,7 +63,7 @@ def mkNCtx : MetaM NCtx := do
 
 /-- Clearing for `Nat`: nonneg integer multipliers `kᵢ` and residual `C`. -/
 def clearMultipliers (mults : Array Rat) (cst : Rat) : MetaM (Nat × Array Nat × Nat) := do
-  let L : Nat := mults.foldl (fun acc lam => Nat.lcm acc lam.den) 1
+  let L : Nat := denLcm mults
   let Li : Rat := (L : Int)
   let ks ← mults.mapM (fun lam => do
     let v := Li * lam

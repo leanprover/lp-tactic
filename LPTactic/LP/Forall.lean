@@ -444,9 +444,7 @@ def canonicaliseCut (cut : LinExpr) : CutCanon := Id.run do
     else return .contradiction
   -- Step 2: clear denominators by multiplying by LCM of all denominators
   -- (including const's).
-  let allDens : Array Nat :=
-    (sorted.map (fun (_, c) => c.den)).push cut.const.den
-  let lcmDen : Nat := allDens.foldl Nat.lcm 1
+  let lcmDen : Nat := denLcm ((sorted.map (fun (_, c) => c)).push cut.const)
   let lcmInt : Int := Int.ofNat lcmDen
   let scaleRat (r : Rat) : Int := r.num * (lcmInt / Int.ofNat r.den)
   let intCoeffs : Array (FVarId × Int) := sorted.map (fun (v, c) => (v, scaleRat c))

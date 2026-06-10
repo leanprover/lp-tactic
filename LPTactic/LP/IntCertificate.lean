@@ -1,9 +1,9 @@
 /-
 `Int` carrier instance for the unified certificate engine. Provides `intMethods :
-CarrierMethods` (native `Int.ofNat`/`negSucc` literals, bare `Eq.refl` leaves — validated
-faster than the OLD Rat engine) and the thin `Int`-specific assembly (multiplier clearing +
-native-`Int.mul` scaled/unscaled closers). The structural normalizer lives in
-`CarrierCertificate.lean`; only the per-carrier strategy + assembly are here.
+CarrierMethods` (native `Int.ofNat`/`negSucc` literals, bare `Eq.refl` leaves) and the
+thin `Int`-specific assembly (multiplier clearing + native-`Int.mul` scaled/unscaled
+closers). The structural normalizer lives in `CarrierCertificate.lean`; only the
+per-carrier strategy + assembly are here.
 -/
 module
 public meta import LPTactic.LP.CarrierCertificate
@@ -80,7 +80,7 @@ def mkICtx : MetaM ICtx := do
 /-! ### Clearing: rational multipliers → integer `(L, kᵢ, C)`. -/
 
 def clearMultipliers (mults : Array Rat) (cst : Rat) : MetaM (Int × Array Int × Int) := do
-  let L : Nat := mults.foldl (fun acc lam => Nat.lcm acc lam.den) 1
+  let L : Nat := denLcm mults
   let Li : Int := (L : Int)
   let ks ← mults.mapM (fun lam => do
     let v := (Li : Rat) * lam
