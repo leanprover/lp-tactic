@@ -2,7 +2,7 @@
   Tactic-side default-backend dispatch.
 
   The `by lp` tactic calls into `dispatchSolveExact`, which selects
-  the registered backend to run for this call. Three layers of
+  the registered backend to run for this call. Two layers of
   resolution:
 
   1. **Explicit per-call name** (`?backendName`): caller passed a

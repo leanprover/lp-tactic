@@ -2,9 +2,10 @@
   The `lp.backend` Lean option: lets the user pin a specific backend
   by name for `by lp` and `by maximize`.
 
-  Precedence (lowest binds tightest):
+  Precedence, lowest first (each later layer overrides the ones
+  above it):
   - default fallback: highest-priority backend in `availableBackends`
-    whose probe succeeds (today's behaviour).
+    whose probe succeeds.
   - `set_option lp.backend "<name>"`: pin a backend for everything
     in scope. Error if not registered.
   - per-call `(backend := <ident>)` (see `Frontend.lean`): override
