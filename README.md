@@ -84,9 +84,14 @@ LPTactic/LP/Maximize.lean  # `maximize` tactic body
 LPTactic/LP/BackendOption.lean
                            # the `lp.backend` option + per-call override
 LPTactic/LP/Certificate.lean
-                           # Rat certificate → kernel proof-term reconstruction
+                           # Q-literal rendering + residual helpers (Rat groundwork)
 LPTactic/LP/CarrierCertificate.lean
-                           # carrier-parametrized certificate engine (CarrierMethods)
+                           # the carrier-parametrized certificate engine (CarrierMethods)
+LPTactic/LP/CarrierLemmas.lean
+                           # macros stamping out the per-carrier monomorphic lemma blocks
+LPTactic/LP/RingCertificate.lean
+                           # shared ordered-comm-ring assembly (Int, Dyadic)
+LPTactic/LP/RatCertificate.lean,   (lemmas in Types.lean)
 LPTactic/LP/IntCertificate.lean,   IntGeneric.lean
 LPTactic/LP/NatCertificate.lean,   NatGeneric.lean
 LPTactic/LP/DyadicCertificate.lean, DyadicGeneric.lean

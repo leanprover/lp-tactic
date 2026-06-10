@@ -105,108 +105,14 @@ def checkClosedBody (atoms : Array (Rel × LinExpr × LinExpr))
     checkLin lhs
     checkLin rhs
 
-/-! ### Carrier-generic frontend context (`∃`/`maximize`).
-
-The `∃`/`maximize` frontends need exactly two carrier-specific operations beyond the
-(already carrier-aware) atomic discharger `proveEntailed`: rendering a primal/bound
-value as a carrier literal, and turning an inconsistent hypothesis set into a proof of
-the surrounding goal. `FrontendCtx` bundles both, dispatched once per invocation.
-
-For the non-field carriers (`Int`/`Dyadic`/`Nat`) the primal/bound from the ℚ LP must
-LAND in the carrier — an integer for `Int`, a nonneg integer for `Nat`, a dyadic for
-`Dyadic`. When it does not, `mkNumeral` throws: that case is genuine integer/lattice
-programming (a fractional vertex/optimum has no carrier witness), which is `omega`/
-`cutsat`'s job, not `lp`'s ℚ-Farkas. The contradiction path has no such restriction —
-Farkas inconsistency of ℚ-affine hypotheses is carrier-independent. -/
-structure FrontendCtx where
-  carrier : Expr
-  /-- Render a primal/bound `Rat` value as a `carrier` literal; throws if `v` is not
-  representable in `carrier` (non-integer for `Int`/`Nat`, negative for `Nat`,
-  non-dyadic for `Dyadic`). -/
-  mkNumeral : Rat → MetaM Expr
-  /-- Prove `goalType` from inconsistent `rows` weighted by nonneg Farkas `mults`
-  (zero objective), via `False.elim`. -/
-  mkContradiction : Array Row → Array Rat → Array FVarId → Expr → AtomTable → MetaM Expr
-
-/-- The `Rat` Farkas-contradiction path (`Q`-literal discharger), kept off the `ofRat`
-field bridge so `∃`/`maximize` over `Rat` does not regress. -/
-def ratHypsContradiction (rows : Array Row) (mults : Array Rat) (vars : Array FVarId)
-    (goalType : Expr) (atoms : AtomTable := {}) : MetaM Expr := do
-  let rowLins := rows.map (·.expr)
-  let residual := computeResidual {} rowLins mults
-  unless isLinExprClosed residual do throwError "lp: Farkas certificate did not cancel"
-  let cval := residual.const
-  let mut entries : Array (Rat × Expr × Expr × Option Expr) := #[]
-  for h : i in [0:rows.size] do
-    let lam := mults[i]!
-    if lam ≠ 0 then
-      let sp? ← if rows[i].strict then pure (some (← rows[i].strictProof)) else pure none
-      entries := entries.push (lam, ← rows[i].term, ← rows[i].proof, sp?)
-  let (sumExpr, sumProof, sumStrict) ← buildWeightedSumAndProof entries
-  let identProof ← proveCertificateIdentity vars sumExpr cval atoms
-  let cExpr ← mkRatLit cval
-  let hFalse ←
-    if sumStrict then
-      let hC ← mkDecideProof (← mkAppM ``LE.le #[(← mkRatLit 0), cExpr])
-      pure <| mkAppN (mkConst ``direct_infeasible_close_strict)
-        #[sumExpr, cExpr, sumProof, hC, identProof]
-    else
-      let hC ← mkDecideProof (← mkAppM ``LT.lt #[(← mkRatLit 0), cExpr])
-      pure <| mkAppN (mkConst ``direct_infeasible_close)
-        #[sumExpr, cExpr, sumProof, hC, identProof]
-  mkAppOptM ``False.elim #[some goalType, some hFalse]
-
-/-- Build the per-invocation `FrontendCtx`, dispatched on the carrier (mirrors the
-`Atomic.proveEntailed` 5-way split). -/
-def mkFrontendCtx (carrier : Expr) : MetaM FrontendCtx := do
-  if ← isDefEq carrier (mkConst ``Int) then
-    let ic ← IntC.mkICtx
-    return {
-      carrier := carrier
-      mkNumeral := fun v => do
-        unless v.den == 1 do
-          throwError "lp: `∃`/`maximize` over `Int` needs an integer value, but the {
-            ""}LP gave {v}; integrality is `omega`/`cutsat`'s job, not `lp`'s ℚ-Farkas"
-        pure (IntC.mkIntNum v.num)
-      mkContradiction := fun rows mults vars gt atoms => ic.assembleInfeasibleProof rows mults vars gt atoms }
-  else if ← isDefEq carrier (mkConst ``Dyadic) then
-    let dc ← DyadicC.mkDCtx
-    return {
-      carrier := carrier
-      mkNumeral := fun v => do
-        unless (DyadicC.pow2Log? v.den).isSome do
-          throwError "lp: `∃`/`maximize` over `Dyadic` needs a dyadic value (denominator {
-            ""}a power of two), but the LP gave {v}"
-        pure (DyadicC.mkDyadicNum v)
-      mkContradiction := fun rows mults vars gt atoms => dc.assembleInfeasibleProof rows mults vars gt atoms }
-  else if ← isDefEq carrier (mkConst ``Nat) then
-    let nc ← NatC.mkNCtx
-    return {
-      carrier := carrier
-      mkNumeral := fun v => do
-        unless v.den == 1 && v.num ≥ 0 do
-          throwError "lp: `∃`/`maximize` over `Nat` needs a nonneg integer value, but the {
-            ""}LP gave {v}; integrality is `omega`/`cutsat`'s job, not `lp`'s ℚ-Farkas"
-        pure (NatC.mkNatNum v)
-      mkContradiction := fun rows mults vars gt _atoms => nc.assembleInfeasibleProof rows mults vars gt }
-  else
-    let cc ← Field.mkCCtx carrier
-    let isRat ← isDefEq carrier ratType
-    return {
-      carrier := carrier
-      mkNumeral := cc.mkRatNumeral
-      mkContradiction := fun rows mults vars gt atoms =>
-        if isRat then ratHypsContradiction rows mults vars gt atoms
-        else cc.assembleInfeasibleProof rows mults vars gt atoms }
-
 /-- Try to certify that the outer hypotheses `rows` (over `vars`) are inconsistent,
 producing a proof of `goalType` (via `False.elim`) on success, or `none` if the probe
 doesn't fire (no rows, unchecked status, or the LP says feasible).
 
 This is the existential-path inconsistency-probe fallback: a fixed constant-zero
 objective (`max 0 subject to H`) so we probe only the consistency of `H`; the carrier's
-`mkContradiction` builds the `goalType` proof from the Farkas dual. -/
-def tryHypsInconsistent (fctx : FrontendCtx) (rows : Array Row) (vars : Array FVarId)
+`assembleInfeasible` builds the `goalType` proof from the Farkas dual. -/
+def tryHypsInconsistent (ops : CarrierOps) (rows : Array Row) (vars : Array FVarId)
     (goalType : Expr) (atoms : AtomTable := {}) : MetaM (Option Expr) := do
   if rows.size = 0 then return none
   -- Zero-variable special case: every row is a closed fact. A `≤` row with `const > 0` is
@@ -220,9 +126,9 @@ def tryHypsInconsistent (fctx : FrontendCtx) (rows : Array Row) (vars : Array FV
       if isLinExprClosed rows[i].expr && contradictory then
         let mults := (Array.replicate rows.size (0 : Rat)).set! i 1
         -- Best-effort: a strict (`c = 0`) row over a carrier whose assembler lacks strict
-        -- support (`Int`/`Nat`/`Dyadic`) throws — skip it and keep scanning for a usable row
+        -- support (`Nat`) throws — skip it and keep scanning for a usable row
         -- (e.g. a later non-strict `c > 0` contradiction that every carrier handles).
-        try return some (← fctx.mkContradiction rows mults vars goalType atoms)
+        try return some (← ops.assembleInfeasible rows mults vars goalType atoms)
         catch _ => pure ()
     return none
   let vidx := mkVarIdx vars
@@ -249,7 +155,7 @@ def tryHypsInconsistent (fctx : FrontendCtx) (rows : Array Row) (vars : Array FV
       let residual := computeResidual {} (rows.map (·.expr)) mults
       unless isLinExprClosed residual do return none
       unless decide (0 < residual.const) do return none
-      return some (← fctx.mkContradiction rows mults vars goalType atoms)
+      return some (← ops.assembleInfeasible rows mults vars goalType atoms)
   | _ =>
       -- The *relaxed* (`≤`) system is feasible, but the strict (`<`) hypotheses may still
       -- make it infeasible (e.g. `a < b, b ≤ a`). Probe with the strict-margin LP: if its
@@ -279,7 +185,7 @@ def tryHypsInconsistent (fctx : FrontendCtx) (rows : Array Row) (vars : Array FV
           for h : i in [0:rows.size] do
             if rows[i].strict && mults[i]! != 0 then hasStrictPos := true
           unless hasStrictPos do return none
-          return some (← fctx.mkContradiction rows mults vars goalType atoms)
+          return some (← ops.assembleInfeasible rows mults vars goalType atoms)
       | _ => return none
 
 /-- Apply `Exists.intro` with the given witness to `g`, returning the
@@ -332,13 +238,13 @@ partial def solveExistential (solveGoal : MVarId → TacticM Unit)
     (g : MVarId) : TacticM Unit := do
   -- The carrier `α` comes from the existential binder; build its certificate
   -- context once (witnesses + the inconsistency-probe Farkas proof use it).
-  let (carrier, fctx) ← g.withContext do
+  let (carrier, ops) ← g.withContext do
     let t ← whnf (← instantiateMVars (← g.getType))
     let args := t.getAppArgs
     unless t.getAppFn.isConstOf ``Exists && args.size == 2 do
       throwError "lp(∃): expected an existential goal, got{indentExpr (← g.getType)}"
     let carrier ← whnf args[0]!
-    pure (carrier, ← mkFrontendCtx carrier)
+    pure (carrier, ← mkCarrierOps carrier)
   -- Collect outer hypotheses (visible before entering the binders); used
   -- only by the inconsistency-probe fallback on `.infeasible`.
   let (hypRows, hypState) ← g.withContext do
@@ -388,14 +294,14 @@ partial def solveExistential (solveGoal : MVarId → TacticM Unit)
       -- Splice the primal as carrier numerals into an `Exists.intro` chain.
       let mut curG := g
       for v in primal do
-        let wExpr ← fctx.mkNumeral v
+        let wExpr ← ops.mkNumeral v
         curG ← introExistsRat curG wExpr
       -- Residual: closed `And`/`Eq`/`LE` conjunction in `Rat`. Discharge
       -- via the closed-goal atomic short-circuit.
       solveGoal curG
   | .error none =>
       -- Witness LP infeasible: probe whether outer hyps are inconsistent.
-      match ← tryHypsInconsistent fctx hypRows hypState.vars (← g.getType) with
+      match ← tryHypsInconsistent ops hypRows hypState.vars (← g.getType) with
       | some proof =>
           g.assign proof
       | none =>

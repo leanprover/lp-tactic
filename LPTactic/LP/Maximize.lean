@@ -22,7 +22,8 @@ Architecturally this is a *forward-direction surface* on top of the same
 sup-LP construction the x-independent inner-`∀` path uses — that path
 substitutes a residual row into a witness LP, while `maximize` injects
 the bound as a new hypothesis. The proof of `expr ≤ N` is built by
-reusing `proveEntailed` with `rhs := mkRatLit N`: `direct_le_close` is
+reusing `proveEntailed` with `rhs` the carrier numeral for `N`
+(`CarrierOps.mkNumeral`): the carrier's `≤`-closer is
 the closing lemma; the Farkas-multiplier weighting against the original
 hypothesis terms is the binder/vector mapping; and `normalizeR` is the
 surface-form reflection.
@@ -82,7 +83,7 @@ def runMaximize (g : MVarId) (hname : Name) (boundName : Option Name)
     throwError "maximize: expected a supported-carrier expression, got{indentExpr exprE}{
       ""}\n  of type{indentExpr carrier}"
   -- Carrier frontend context (bound numerals + the inconsistency probe).
-  let fctx ← mkFrontendCtx carrier
+  let ops ← mkCarrierOps carrier
   -- Parse `expr` (registers its carrier locals as LP variables) and then
   -- collect the non-strict linear hypotheses from the local context.
   -- Order matters only for the LP column ordering: `expr`'s vars come
@@ -106,7 +107,7 @@ def runMaximize (g : MVarId) (hname : Name) (boundName : Option Name)
   -- and stay open. The closed-rows-only branch of `tryHypsInconsistent`
   -- handles the probe without SoPlex.
   if vars.size = 0 then
-    match ← tryHypsInconsistent fctx rows vars (← g.getType) with
+    match ← tryHypsInconsistent ops rows vars (← g.getType) with
     | some proofTerm =>
         g.assign proofTerm
         return
@@ -115,7 +116,7 @@ def runMaximize (g : MVarId) (hname : Name) (boundName : Option Name)
     -- `c ≤ 0`); the bound `expr ≤ N` follows from `Rat.le_refl` via
     -- `proveEntailed`'s empty-multiplier branch.
     let N := exprLin.const
-    let NE ← fctx.mkNumeral N
+    let NE ← ops.mkNumeral N
     let proof ← proveEntailed rows false vars exprE NE
     injectMaxBound g hname boundName carrier exprE NE proof
     return
@@ -151,7 +152,7 @@ def runMaximize (g : MVarId) (hname : Name) (boundName : Option Name)
       -- offset, so a `maximize 3 * x + 7` optimum is the full
       -- `3 * x* + 7`, not just `3 * x*`.
       let N : Rat := exprLin.evalAt vidx pr.toArray
-      let NE ← fctx.mkNumeral N
+      let NE ← ops.mkNumeral N
       -- Build `proof : exprE ≤ NE` by reusing the atomic-goal
       -- entailment discharger. This re-solves an LP internally — a small redundant
       -- cost in exchange for sharing the entire closing-lemma and
@@ -167,7 +168,7 @@ def runMaximize (g : MVarId) (hname : Name) (boundName : Option Name)
       -- probe to extract a `False` proof from the dual, then close the
       -- surrounding goal (any proposition) by `False.elim`. This is the
       -- only branch where `maximize` touches the goal.
-      match ← tryHypsInconsistent fctx rows vars (← g.getType) with
+      match ← tryHypsInconsistent ops rows vars (← g.getType) with
       | some proofTerm =>
           g.assign proofTerm
       | none =>

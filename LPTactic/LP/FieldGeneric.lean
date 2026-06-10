@@ -142,6 +142,12 @@ theorem neg_atom_norm (x : α) : -x = Field.NormNum.ofRat (-1) * x + Field.NormN
 theorem ofRat_zero_mul (x : α) : Field.NormNum.ofRat 0 * x = Field.NormNum.ofRat 0 := by
   rw [ofRat_zero, Semiring.zero_mul]
 
+/-- Dense-row fast-path step: appending a fresh trailing atom to an already-rendered
+`a` is `take_right` fed with `a + ⟦0⟧ = a`. Stated against the rendered `ofRat 0`
+(defeq to `0` over `Rat` but NOT over `ℝ`). -/
+theorem add_zero_norm (a : α) : a + Field.NormNum.ofRat 0 = a := by
+  rw [ofRat_zero, AddCommMonoid.add_zero]
+
 theorem take_left (h ta b res : α) (e : ta + b = res) : (h + ta) + b = h + res := by
   subst e; exact AddCommMonoid.add_assoc h ta b
 

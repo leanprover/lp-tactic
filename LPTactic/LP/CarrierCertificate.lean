@@ -227,15 +227,33 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
   | _ =>
       let fn := e.getAppFn
       let args := e.getAppArgs
+      -- Arity guards: a partially-applied operator head was atomized by the parser, so
+      -- the normalizer must atomize it too (descending would diverge from the parse).
       match fn with
       | .const ``HAdd.hAdd _ =>
+          unless args.size == 6 do return ← m.normalizeAtom e
           let aE := args[4]!; let bE := args[5]!
           let (La, pa, rA) ← m.normalizeR vidx aE
           let (Lb, pb, rB) ← m.normalizeR vidx bE
           let step1 := m.applyLemma `add_congr_eq #[aE, rA, bE, rB, pa, pb]
+          -- Dense-row fast path: dense rows arrive as left-nested sums, so at each `+`
+          -- node `Lb` is typically a single FRESH atom (`cB*vB + 0`) whose `varIdx`
+          -- exceeds every atom already in `La` (parse order assigns indices left to
+          -- right). Prepend its head in O(1) via `take_right` fed with `rA + 0 = rA`
+          -- instead of running the O(|La|) merge — O(N) instead of O(N²) per row.
+          if Lb.coeffs.size == 1 && Lb.const == 0 then
+            let (vB, cB) := Lb.coeffs[0]!
+            if La.coeffs.isEmpty || varIdx vidx vB > varIdx vidx La.coeffs[0]!.1 then
+              let h := rB.appFn!.appArg!  -- extract `cB*vB` from `cB*vB + 0`
+              let pm := m.applyLemma `take_right
+                #[rA, h, m.mkLit 0, rA, m.applyLemma `add_zero_norm #[rA]]
+              let rL := m.mkAdd h rA
+              let L : LinExpr := { La with coeffs := #[(vB, cB)] ++ La.coeffs }
+              return (L, m.mkEqTrans e (m.mkAdd rA rB) rL step1 pm, rL)
           let (L, pm, rL) ← m.proveMerge vidx La Lb
           return (L, m.mkEqTrans e (m.mkAdd rA rB) rL step1 pm, rL)
       | .const ``HSub.hSub _ =>
+          unless args.size == 6 do return ← m.normalizeAtom e
           let aE := args[4]!; let bE := args[5]!
           let (La, pa, rA) ← m.normalizeR vidx aE
           let (Lb, pb, rB) ← m.normalizeR vidx bE
@@ -252,6 +270,7 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
           let chained1 := m.mkEqTrans e midSub midAdd step1 step2
           return (L, m.mkEqTrans e midAdd rL chained1 pm, rL)
       | .const ``Neg.neg _ =>
+          unless args.size == 3 do return ← m.normalizeAtom e
           let aE := args[2]!
           if aE.isFVar then
             let L : LinExpr := {coeffs := #[(aE.fvarId!, -1)]}
@@ -261,6 +280,7 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
           let step1 := m.applyLemma `neg_congr_eq #[aE, rA, pa]
           return (L, m.mkEqTrans e (m.mkNeg rA) rL step1 pn, rL)
       | .const ``HMul.hMul _ =>
+          unless args.size == 6 do return ← m.normalizeAtom e
           let lhsE := args[4]!; let rhsE := args[5]!
           if let some kVal ← m.scalarLit? lhsE then
             if kVal != 0 && rhsE.isFVar then
@@ -296,6 +316,7 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
           else
             m.normalizeAtom e
       | .const ``HDiv.hDiv _ =>
+          unless args.size == 6 do return ← m.normalizeAtom e
           let dividend := args[4]!; let divisor := args[5]!
           -- `e / c = c⁻¹ * e` (true even at `c = 0`); recurse through the scalar-mul
           -- path, which recognises the closed inverse `c⁻¹` as the scalar `1/c`.
@@ -321,5 +342,53 @@ def proveCertificateIdentity (m : CarrierMethods) (vars : Array FVarId) (lhsId :
   return pfNorm
 
 end CarrierMethods
+
+/-- `Σ kᵢ * termᵢ` with a proof it is `≤ 0` (`< 0` when a strict row contributes a
+positive multiplier). Entries are `(k, term, leProof, strictProof?)` with `k`
+rendered via `m.mkLit`. Sign facts are decided on the carrier with EXPLICIT
+implicit args (no per-row typeclass inference); decide types built from the
+cached `leFn`/`ltFn`. Used by the carriers with decidable literal comparisons
+(`Rat`, `Int`, `Dyadic`); the field carriers lift sign facts via `ofRat_nonneg`
+instead. -/
+def buildWeightedSumDecide (m : CarrierMethods) (leFn ltFn : Expr)
+    (entries : Array (Rat × Expr × Expr × Option Expr)) :
+    MetaM (Expr × Expr × Bool) := do
+  if entries.size = 0 then
+    return (m.mkLit 0, m.applyLemma `zero_self_le #[], false)
+  -- A scaled head `k * term`, strict (`< 0`) for a strict row with positive multiplier.
+  let mkHead (k : Rat) (term hRow : Expr) (sp? : Option Expr) :
+      MetaM (Expr × Expr × Bool) := do
+    let kE := m.mkLit k
+    let head := m.mkMul kE term
+    match sp? with
+    | some sp =>
+      let hk ← mkDecideProof (mkApp2 ltFn (m.mkLit 0) kE)
+      return (head, m.applyLemma `smul_neg #[term, kE, sp, hk], true)
+    | none =>
+      let hk ← mkDecideProof (mkApp2 leFn (m.mkLit 0) kE)
+      return (head, m.applyLemma `smul_nonpos #[term, kE, hRow, hk], false)
+  let n := entries.size
+  let (kₖ, termₖ, hRowₖ, spₖ?) := entries[n - 1]!
+  let (sₖ, pₖ, strictₖ) ← mkHead kₖ termₖ hRowₖ spₖ?
+  let mut sumExpr := sₖ
+  let mut sumProof := pₖ
+  let mut sumStrict := strictₖ
+  for i in [0:n-1] do
+    let (k, term, hRow, sp?) := entries[n - 2 - i]!
+    let (head, headProof, headStrict) ← mkHead k term hRow sp?
+    let (newProof, newStrict) :=
+      if headStrict then
+        -- `head < 0`; weaken a strict rest to `≤ 0` for `add_neg_nonpos`.
+        let restLe := if sumStrict then m.applyLemma `le_of_lt #[sumExpr, m.mkLit 0, sumProof]
+                      else sumProof
+        (m.applyLemma `add_neg_nonpos #[head, sumExpr, headProof, restLe], true)
+      else if sumStrict then
+        (m.applyLemma `add_nonpos_neg #[head, sumExpr, headProof, sumProof], true)
+      else
+        (m.applyLemma `add_nonpos #[head, sumExpr, headProof, sumProof], false)
+    sumExpr := m.mkAdd head sumExpr
+    sumProof := newProof
+    sumStrict := newStrict
+  return (sumExpr, sumProof, sumStrict)
 
 end LP.Tactic.LP.Internal
