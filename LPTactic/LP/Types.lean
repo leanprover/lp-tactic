@@ -23,6 +23,13 @@ construction (`proveCertificateIdentity`). No `Problem` / `denseMatrix` /
 
 /-! ## Small `Rat` helpers and closing lemmas -/
 
+/-- LCM of the denominators of `rs` (`1` for the empty array). Shared by
+the carrier clearing steps (`Int`/`Nat`/`Dyadic` `clearMultipliers`) and
+the Benders cut canonicalizer, which all scale rationals by this value
+to clear denominators. -/
+def denLcm (rs : Array Rat) : Nat :=
+  rs.foldl (fun acc r => Nat.lcm acc r.den) 1
+
 theorem rat_le_of_sub_nonpos {a b : Rat} (h : a - b ≤ 0) : a ≤ b := by
   have hAdd := (Rat.add_le_add_right (a := a - b) (b := 0) (c := b)).mpr h
   simpa [Rat.sub_eq_add_neg, Rat.add_assoc, Rat.neg_add_cancel, Rat.add_zero, Rat.zero_add]
@@ -252,9 +259,6 @@ so the metaprogram applies them via `mkAppN`. -/
 
 theorem add_congr_eq (a A b B : Rat) (ha : a = A) (hb : b = B) :
     a + b = A + B := by subst ha; subst hb; rfl
-
-theorem sub_congr_eq (a A b B : Rat) (ha : a = A) (hb : b = B) :
-    a - b = A - B := by subst ha; subst hb; rfl
 
 theorem mul_congr_eq_r (k a A : Rat) (e : a = A) : k * a = k * A := by
   subst e; rfl

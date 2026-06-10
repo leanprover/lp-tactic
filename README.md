@@ -74,23 +74,34 @@ LPTactic/Registry.lean     # registerBackend, resolveBackend, availableBackends
 LPTactic/Dispatch.lean     # dispatchSolveExact (registry-driven default)
 LPTactic/Q.lean            # kernel-reducible rational literals
 LPTactic/LP.lean           # `lp` and `maximize` tactic frontend
-LPTactic/LP/Types.lean     # tactic state + telemetry
+LPTactic/LP/Types.lean     # LinExpr + parser/normalizer lemma toolkit
 LPTactic/LP/Parse.lean     # goal parsing
 LPTactic/LP/Problem.lean   # tactic-side Problem construction
-LPTactic/LP/Atomic.lean    # direct-certificate path
+LPTactic/LP/Atomic.lean    # direct-certificate path + carrier dispatch
 LPTactic/LP/Exists.lean    # existential-witness LP path
 LPTactic/LP/Forall.lean    # inner-∀ + Benders subproblem paths
 LPTactic/LP/Maximize.lean  # `maximize` tactic body
+LPTactic/LP/BackendOption.lean
+                           # the `lp.backend` option + per-call override
 LPTactic/LP/Certificate.lean
-                           # certificate → kernel proof-term reconstruction
+                           # Rat certificate → kernel proof-term reconstruction
+LPTactic/LP/CarrierCertificate.lean
+                           # carrier-parametrized certificate engine (CarrierMethods)
+LPTactic/LP/IntCertificate.lean,   IntGeneric.lean
+LPTactic/LP/NatCertificate.lean,   NatGeneric.lean
+LPTactic/LP/DyadicCertificate.lean, DyadicGeneric.lean
+LPTactic/LP/FieldCertificate.lean, FieldGeneric.lean
+                           # per-carrier engine instances + their static lemmas
 LPTactic/LP/Frontend.lean  # syntax elaboration entry point
+LPTacticTest/              # `lake test` suites (registry + goal shapes)
 ```
 
-Declarations remain under `namespace LP` (or `LP`,
-`LP.Tactic.LP`) so consumers writing `LP.solveVerifiedWith`
-or `by lp` resolve to the same definitions regardless of which
-package owns them. The synchronous, FFI-specialised
-`LP.solveVerified` (`Except`-typed) lives in
+Declarations live under `namespace LP` (public API such as
+`LP.solveVerifiedWith` and the registry) and
+`namespace LP.Tactic.LP` (tactic internals), so consumers writing
+`LP.solveVerifiedWith` or `by lp` resolve to the same definitions
+regardless of which package owns them. The synchronous,
+FFI-specialised `LP.solveVerified` (`Except`-typed) lives in
 `leanprover/lp-backend-soplex-ffi`, not here.
 
 ## Licence

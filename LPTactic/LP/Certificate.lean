@@ -326,8 +326,8 @@ def precomputeSpine (L : LinExpr) (atoms : AtomTable := {}) :
   let mut suffix : Array Expr := Array.mkEmpty (n + 1)
   suffix := suffix.push (← mkRatLit L.const)
   for k in [0:n] do
-    -- The k-th iteration produces `suffix[k+1]` ... no wait, we build from
-    -- right to left so suffix[i] is built when k = n - i.
+    -- Built right to left: iteration k pushes the rendering that starts
+    -- at coefficient n - (k + 1), so suffix[i] is produced at k = n - i.
     let _ := k
     let idx := suffix.size  -- next slot
     let cur := suffix[suffix.size - 1]!

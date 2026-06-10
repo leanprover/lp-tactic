@@ -84,29 +84,6 @@ partial def peelExistsRat (target : Expr) (acc : Array FVarId)
         peelExistsRat body (acc.push xs[0]!.fvarId!) k
   k acc target
 
-/-- Collect atomic non-strict Rat (in)equalities from an existential
-body, descending only through `And`. Throws on strict inequalities,
-nested quantifiers, or any non-atomic shape. -/
-partial def collectExistsAtoms (body : Expr) :
-    ParseM (Array (Rel × LinExpr × LinExpr)) := do
-  -- Detect `And` on a `whnfR`-reduced form (matching the atomic-goal
-  -- top-level `And` dispatch in `solveGoal`). The non-reduced `body`
-  -- is what we pass to `parseAtomic?`: reducible whnf can unfold
-  -- `LE.le` into `Rat.blt _ _ = false`, which `parseAtomic?` wouldn't
-  -- recognize.
-  let bodyW ← whnfR body
-  if let some (left, right) := isAnd? bodyW then
-    return (← collectExistsAtoms left) ++ (← collectExistsAtoms right)
-  match ← parseAtomic? body with
-  | none =>
-      throwError
-        "lp: existential body must be a flat conjunction of atomic non-strict {
-          ""}Rat (in)equality constraints; got{indentExpr body}"
-  | some (.lt, _, _, _, _) =>
-      throwError "lp: strict inequalities are not supported in existential bodies"
-  | some (rel, _, _, lhs, rhs) =>
-      return #[(rel, lhs, rhs)]
-
 /-- Closed-body invariant check, post-canonicalization.
 
 For each extracted `LinExpr`, every free `Rat` local in `.coeffs` must

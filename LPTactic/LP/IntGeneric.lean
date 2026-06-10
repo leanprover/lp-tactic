@@ -1,11 +1,11 @@
 /-
-Int-monomorphic certificate lemmas for the `lp` tactic — the de-risking prototype's
-static layer. Concrete `Int` (no carrier variable), stated in NATIVE `Int` operations
-(`Int.add`/`Int.mul`/`Int.neg`), NOT `zsmul`/`IntModule` `•` — so the produced proof
-term carries no `intCast` bridge (`Ring.zsmul_eq_intCast_mul`), which is the whole perf
-point. `Int` is a computable ordered commutative ring: leaf coefficient equalities close
-by `Eq.refl` (validated), and these structural lemmas are static so the proofs may use
-`grind`/`omega` (the runtime-tactic prohibition applies to the tactic, not to these).
+Int-monomorphic certificate lemmas for the `lp` tactic. Concrete `Int` (no carrier
+variable), stated in native `Int` operations (`Int.add`/`Int.mul`/`Int.neg`), not
+`zsmul`/`IntModule` `•` — so the produced proof term carries no `intCast` bridge
+(`Ring.zsmul_eq_intCast_mul`), which is the whole perf point. `Int` is a computable
+ordered commutative ring: leaf coefficient equalities close by `Eq.refl`, and these
+structural lemmas are static so the proofs may use `grind`/`omega` (the runtime-tactic
+prohibition applies to the tactic, not to these).
 -/
 module
 public import Init.Grind.Ordered.Int
@@ -128,8 +128,6 @@ theorem neg_cons (x c m rest rest' : Int) (hm : -c = m) (e : -rest = rest') :
     -(c * x + rest) = m * x + rest' := by grind
 
 theorem add_congr_eq (a A b B : Int) (ha : a = A) (hb : b = B) : a + b = A + B := by grind
-
-theorem sub_congr_eq (a A b B : Int) (ha : a = A) (hb : b = B) : a - b = A - B := by grind
 
 theorem mul_congr_eq_r (k a A : Int) (e : a = A) : k * a = k * A := by grind
 

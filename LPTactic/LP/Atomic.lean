@@ -201,15 +201,13 @@ def proveEntailed (rows : Array Row) (strict : Bool)
     vars.size = 0 ||
     (isLinExprClosed objLin &&
      (if strict then decide (0 < objLin.const) else decide (0 ≤ objLin.const)))
-  -- Fast-path for `α = Rat`: route through the original `Q`-literal discharger,
-  -- which produces the byte-for-byte shipped proof term and pays no
-  -- `userLit = ofRat r` literal-bridge cost (the field engine's ~20% overhead).
-  -- `isDefEq` (not a syntactic check) so `Rat` aliases / reducible defs hit it too.
-  -- Only synthesize the field `CCtx` for genuine non-`Rat` carriers (e.g. `ℝ`).
-  -- Computable-carrier fast paths render coefficients as NATIVE kernel-reducible
-  -- literals (defeq to user literals, no `ofRat` bridge): `Rat` via the original
-  -- `Q`-discharger, `Int` via the integer-cleared native-`Int.mul` discharger.
-  -- Only genuine non-computable carriers (e.g. `ℝ`) take the field `CCtx`.
+  -- Computable carriers take fast paths that render coefficients as native
+  -- kernel-reducible literals (defeq to user literals, no `userLit = ofRat r`
+  -- bridge and none of the field engine's ~20% overhead): `Rat` via the
+  -- original `Q`-discharger, `Int` via the integer-cleared native-`Int.mul`
+  -- discharger. Carrier tests use `isDefEq` (not a syntactic check) so
+  -- aliases / reducible defs hit the fast paths too; only genuine
+  -- non-computable carriers (e.g. `ℝ`) synthesize the field `CCtx`.
   let isRat ← isDefEq carrier ratType
   let isInt ← isDefEq carrier (mkConst ``Int)
   let isDyadic ← isDefEq carrier (mkConst ``Dyadic)

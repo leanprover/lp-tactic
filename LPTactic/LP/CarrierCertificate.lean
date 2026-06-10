@@ -1,16 +1,17 @@
 /-
 Carrier-parametrized certificate normalizer for the `lp` tactic — the unified engine
-shared by the `Int` (native-literal) and field/`ℝ` (`ofRat`) carriers. Written ONCE against
+shared by the `Int` (native-literal) and field/`ℝ` (`ofRat`) carriers. Written once against
 a `CarrierMethods` record (named per Lean core precedent: `Simp.Methods`/`Grind.Methods`),
 which bundles the per-carrier-class varying pieces: cached operator Exprs, the coefficient
 renderer, leaf-arithmetic proofs, the scalar recognizer / literal bridge, and a fixed-arity
 lemma applier (namespace + universe levels + instance-prefix baked in).
 
 The structural walk (`normalizeR`/`proveMerge`/`proveSmul`/`proveNeg`/`render`/spine/
-`buildWeightedSum`) is identical across carriers and lives here. The thin per-carrier ASSEMBLY
-(clearing/closers/dispatch) stays explicit in the carrier modules (Codex: keep dispatch
-explicit, share only the skeleton). NO tactic calls on the hot path; uses `quickScalarLit?`
-(never the O(N²) recursive `parseScalar?`) — the lesson banked from the Int prototype.
+`buildWeightedSum`) is identical across carriers and lives here. Only the skeleton is
+shared: the thin per-carrier assembly (clearing/closers/dispatch) stays explicit in the
+carrier modules so each carrier's dispatch remains readable on its own. No tactic calls
+on the hot path; scalars are recognized with `quickScalarLit?`, never the O(N²)
+recursive `parseScalar?`.
 -/
 module
 public meta import LPTactic.LP.Certificate

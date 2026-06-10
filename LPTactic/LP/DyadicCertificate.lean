@@ -90,7 +90,7 @@ def mkDCtx : MetaM DCtx := do
 
 /-- Clearing: integer multipliers `kᵢ`, dyadic scaled residual `C`. -/
 def clearMultipliers (mults : Array Rat) (cst : Rat) : MetaM (Int × Array Int × Rat) := do
-  let L : Nat := mults.foldl (fun acc lam => Nat.lcm acc lam.den) 1
+  let L : Nat := denLcm mults
   let Li : Int := (L : Int)
   let ks ← mults.mapM (fun lam => do
     let v := (Li : Rat) * lam
