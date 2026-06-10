@@ -118,8 +118,6 @@ theorem neg_cons (x c m rest rest' : Dyadic) (hm : -c = m) (e : -rest = rest') :
 
 theorem add_congr_eq (a A b B : Dyadic) (ha : a = A) (hb : b = B) : a + b = A + B := by grind
 
-theorem sub_congr_eq (a A b B : Dyadic) (ha : a = A) (hb : b = B) : a - b = A - B := by grind
-
 theorem mul_congr_eq_r (k a A : Dyadic) (e : a = A) : k * a = k * A := by grind
 
 theorem mul_congr_eq_l (a A k : Dyadic) (e : a = A) : a * k = A * k := by grind

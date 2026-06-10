@@ -184,9 +184,6 @@ theorem neg_cons (x c m rest rest' : α) (hm : -c = m) (e : -rest = rest') :
 theorem add_congr_eq (a A b B : α) (ha : a = A) (hb : b = B) : a + b = A + B := by
   subst ha; subst hb; rfl
 
-theorem sub_congr_eq (a A b B : α) (ha : a = A) (hb : b = B) : a - b = A - B := by
-  subst ha; subst hb; rfl
-
 theorem mul_congr_eq_r (k a A : α) (e : a = A) : k * a = k * A := by subst e; rfl
 
 theorem mul_congr_eq_l (a A k : α) (e : a = A) : a * k = A * k := by subst e; rfl
