@@ -126,6 +126,15 @@ partial def CCtx.proveLitEq (c : CCtx) (e : Expr) (r : Rat) : MetaM Expr := do
     let h₁ ← c.proveLitEq args[2]! v₁
     return ← c.applyEq ``Lean.Grind.Field.NormNum.neg_eq #[c.α, c.fieldInst]
       #[args[2]!, toExpr v₁, toExpr r] #[h₁]
+  if fn.isConstOf ``Inv.inv && args.size == 3 then
+    -- Mirror `quickScalarLit?`'s reject of `0⁻¹`: the inner value `r⁻¹` is `0` exactly when
+    -- `r = 0`, so a zero outer value means the parser would not have treated this as a literal.
+    if r == 0 then
+      throwError "lp(field): unrecognized numeral literal{indentExpr e}"
+    let v₁ := r⁻¹
+    let h₁ ← c.proveLitEq args[2]! v₁
+    return ← c.applyEq ``Lean.Grind.Field.NormNum.inv_eq #[c.α, c.fieldInst]
+      #[args[2]!, toExpr v₁, toExpr r] #[h₁]
   let binArith (lemma : Name) (op : Rat → Rat → Rat) (a b : Expr) : MetaM Expr := do
     let some v₁ ← c.scalarLit? a | throwError "lp(field): non-numeral{indentExpr a}"
     let some v₂ ← c.scalarLit? b | throwError "lp(field): non-numeral{indentExpr b}"
