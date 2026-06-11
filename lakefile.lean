@@ -17,7 +17,7 @@ open Lake DSL
 
 require LPCore from git "https://github.com/leanprover/lp-core" @ "96d003f40ada9c730ae9fe100716214273be651b"
 
-require LPVerify from git "https://github.com/leanprover/lp-verify" @ "3c49af332e3efcbd43766bcedbf9e549c8763752"
+require LPVerify from git "https://github.com/leanprover/lp-verify" @ "b29f8d3dc3ff315dc089cbae9a4ca48612a25752"
 
 package LPTactic
 
