@@ -109,10 +109,10 @@ def mkCarrierOps (carrier : Expr) : MetaM CarrierOps := do
     let nc ← NatC.mkNCtx
     return {
       carrier, kind := .nat
-      assembleLe := fun rows strict objLin mults vars lhs rhs _atoms =>
-        nc.assembleLeProof rows strict objLin mults vars lhs rhs
-      assembleInfeasible := fun rows mults vars goalType _atoms =>
-        nc.assembleInfeasibleProof rows mults vars goalType
+      assembleLe := fun rows strict objLin mults vars lhs rhs atoms =>
+        nc.assembleLeProof rows strict objLin mults vars lhs rhs atoms
+      assembleInfeasible := fun rows mults vars goalType atoms =>
+        nc.assembleInfeasibleProof rows mults vars goalType atoms
       leAntisymm := fun h₁ h₂ => mkAppM ``NatC.le_antisymm #[h₁, h₂]
       mkNumeral := fun v => do
         unless v.den == 1 && v.num ≥ 0 do

@@ -31,7 +31,7 @@ lean_lib LPTactic where
     `lake build LPTacticTest` or run via `lake test`. -/
 lean_lib LPTacticTest where
   roots := #[`LPTacticTest.Registry, `LPTacticTest.Runner, `LPTacticTest.Issue5,
-             `LPTacticTest.Issue27, `LPTacticTest.Issue34]
+             `LPTacticTest.Issue27, `LPTacticTest.Issue34, `LPTacticTest.Issue35]
 
 lean_exe «registry-tests» where
   root := `LPTacticTest.Registry

@@ -116,8 +116,10 @@ def NCtx.proveEq (c : NCtx) (vars : Array FVarId) (aExpr bExpr : Expr) : MetaM E
 
 /-- Optimal-branch certificate over `Nat`. -/
 def NCtx.assembleLeProof (c : NCtx) (rows : Array Row) (strict : Bool)
-    (objLin : LinExpr) (mults : Array Rat) (vars : Array FVarId) (lhs rhs : Expr) :
-    MetaM Expr := do
+    (objLin : LinExpr) (mults : Array Rat) (vars : Array FVarId) (lhs rhs : Expr)
+    (atoms : AtomTable := {}) : MetaM Expr := do
+  -- Inject the atom table so `proveEq`'s normalization can resolve opaque atoms.
+  let c := { c with m := { c.m with atoms } }
   let rowLins := rows.map (·.expr)
   let residual := computeResidual objLin rowLins mults
   unless isLinExprClosed residual do
@@ -152,7 +154,9 @@ def NCtx.assembleLeProof (c : NCtx) (rows : Array Row) (strict : Bool)
 
 /-- Infeasible-branch (Farkas) certificate over `Nat`: `Wl ≤ Wr` but `Wl = Wr + C`, `C > 0`. -/
 def NCtx.assembleInfeasibleProof (c : NCtx) (rows : Array Row) (mults : Array Rat)
-    (vars : Array FVarId) (goalType : Expr) : MetaM Expr := do
+    (vars : Array FVarId) (goalType : Expr) (atoms : AtomTable := {}) : MetaM Expr := do
+  -- Inject the atom table so `proveEq`'s normalization can resolve opaque atoms.
+  let c := { c with m := { c.m with atoms } }
   let rowLins := rows.map (·.expr)
   let residual := computeResidual {} rowLins mults
   unless isLinExprClosed residual do throwError "lp: infeasible Farkas did not cancel"
