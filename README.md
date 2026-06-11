@@ -45,6 +45,31 @@ Without any backend registered, `by lp` reports a structured
 "no usable backend" diagnostic listing every registered backend and
 its probe verdict — so the failure mode is obvious.
 
+## Fragment
+
+`by lp` targets the Π₂ fragment of linear rational arithmetic: a goal
+built from atomic comparisons (`≤`, `<`, `=`) under an outer
+`∃ x₁ … xₙ` block whose body is a conjunction of atoms and inner
+`∀ y₁ … yₘ, G₁ → … → atomic` subformulas, discharged against the local
+linear hypotheses. A top-level `≠` goal is also handled (by splitting on
+the antisymmetry it negates). Strictness runs through the fragment:
+strict (`<`) atoms are supported as hypotheses, as goals, and under the
+quantifiers — strict conjuncts in an existential body, and strict guards
+or strict bodies in an inner universal whose guards do not mention the
+existential witness. An existential witness that must satisfy a strict
+atom is found by maximizing a slack margin so the returned rational point
+clears the boundary; a strict universal is re-proved at the spliced
+witness by the same strict-aware Farkas assembly that closes top-level
+strict goals. Witness selection under strict universals is a sound
+sufficient condition rather than a complete decision procedure, and
+strictness inside an inner universal whose guard mentions the witness
+(the Benders path) is not yet supported.
+
+```lean
+example : ∃ x : Rat, 0 < x ∧ x < 1 := by lp
+example : ∃ x : Rat, 0 ≤ x ∧ ∀ y : Rat, 0 ≤ y → y < 1 → y < x + 1 := by lp
+```
+
 ## Carriers
 
 `by lp` and `maximize` work over a family of ordered carriers, not just `Rat`:
