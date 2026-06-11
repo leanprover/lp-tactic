@@ -15,24 +15,30 @@ namespace LP.Tactic.LP.Internal
 /-! ## Existential goals (`∃ x₁ … xₙ : Rat, B`).
 
 Closes goals of the form `∃ x₁ … xₙ : Rat, B` where `B` is a flat
-conjunction of atomic non-strict (in)equality constraints over the
-existential binders and reducibly-closed numeric constants only.
+conjunction of atomic (in)equality constraints (strict `<` included)
+over the existential binders and reducibly-closed numeric constants only.
 
 The algorithm:
 
 1. Strip nested `∃ x : Rat, …` binders into a single block (entered via
    one `lambdaBoundedTelescope` per binder so the body is canonicalized
    in the same environment the atomic-goal extractor sees).
-2. Parse the body as a flat conjunction of atomic Rat (in)equalities;
-   reject strict constraints, nested quantifiers, or non-atomic shapes.
+2. Parse the body as a flat conjunction of atomic Rat (in)equalities
+   (strict `<` atoms are kept, tagged `strict`); reject nested
+   quantifiers other than the inner-`∀` shape, or non-atomic shapes.
 3. Verify the **closed-body invariant over the canonicalized atoms**:
    every free `Rat` local appearing in any extracted `LinExpr` must be
    an existential binder. Locals that hide behind reducible
    abbreviations, `let`-bindings, projections, or coercions are
    canonicalized by `parseExpr`'s `withReducible <| whnfR` before the
    check, so the check sees the post-canonicalization atoms.
-4. Build a witness LP: `max 0 subject to A x ≤ b` (objective `c = 0`).
-   Any feasible point is optimal at value `0`.
+4. Build a witness LP: `max 0 subject to A x ≤ b` (objective `c = 0`)
+   when no row is strict — any feasible point is optimal. When strict
+   rows are present, instead maximize a bounded slack `δ` that tightens
+   each strict row to `aᵢ·x + δ ≤ bᵢ` and accept iff the certified
+   optimum has `δ > 0`, so the witness satisfies every strict atom
+   strictly. The strict atoms are then closed at the concrete witness by
+   kernel evaluation of numeral comparisons (the closed-goal short-circuit).
 5. Run SoPlex via `solveExact` and branch:
    - `.optimal x*` → splice the primal as `Rat` literals into an
      `Exists.intro` chain; recurse on the now-closed residual body.
@@ -213,7 +219,7 @@ def introExistsRat (g : MVarId) (witness : Expr) : MetaM MVarId := do
     g.assign proof
     return newMVar.mvarId!
 partial def collectExistsBody (xBinders : Array FVarId) (body : Expr) :
-    ParseM (Array (Rel × LinExpr × LinExpr) × Array LinExpr × Array BendersUniversal) := do
+    ParseM (Array (Rel × LinExpr × LinExpr) × Array (LinExpr × Bool) × Array BendersUniversal) := do
   let bodyW ← whnfR body
   if let some (left, right) := isAnd? bodyW then
     let (al, ul, bl) ← collectExistsBody xBinders left
@@ -226,10 +232,8 @@ partial def collectExistsBody (xBinders : Array FVarId) (body : Expr) :
   match ← parseAtomic? body with
   | none =>
       throwError "lp: existential body must be a flat conjunction of atomic {
-        ""}non-strict Rat (in)equality constraints or `∀ y : Rat, G → atomic` {
-        ""}subformulas; got{indentExpr body}"
-  | some (.lt, _, _, _, _) =>
-      throwError "lp: strict inequalities are not supported in existential bodies"
+        ""}Rat (in)equality constraints (strict `<` included) or `∀ y : Rat, {
+        ""}G → atomic` subformulas; got{indentExpr body}"
   | some (rel, _, _, lhs, rhs) =>
       return (#[(rel, lhs, rhs)], #[], #[])
 
@@ -265,18 +269,18 @@ partial def solveExistential (solveGoal : MVarId → TacticM Unit)
         (collectExistsBody binders body).run { vars := binders, carrier }
       checkClosedBody atoms binders
       -- Encode each atomic constraint as `lhs - rhs ≤ 0` (an `=` atom
-      -- expands to a `≤ 0` row in each direction), then append the
-      -- inner-`∀` residual rows (each already in `≤ 0` form).
-      let mut lpRows : Array LinExpr := #[]
+      -- expands to a `≤ 0` row in each direction; a strict `<` atom keeps a
+      -- `strict` flag so the witness LP forces it strictly), then append the
+      -- inner-`∀` residual rows (each already in `≤ 0` form, with its flag).
+      let mut lpRows : Array (LinExpr × Bool) := #[]
       for (rel, lhs, rhs) in atoms do
         let d := lhs.sub rhs
         match rel with
-        | .le => lpRows := lpRows.push d
+        | .le => lpRows := lpRows.push (d, false)
         | .eq =>
-            lpRows := lpRows.push d
-            lpRows := lpRows.push d.neg
-        | .lt =>
-            throwError "lp(∃): strict inequalities are not supported"
+            lpRows := lpRows.push (d, false)
+            lpRows := lpRows.push (d.neg, false)
+        | .lt => lpRows := lpRows.push (d, true)
       lpRows := lpRows ++ univResiduals
       if bendersUnivs.isEmpty then
         -- No x-dependent guards: a single witness LP solves the whole

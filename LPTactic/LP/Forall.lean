@@ -11,44 +11,92 @@ open LP.Tactic (Q)
 
 namespace LP.Tactic.LP.Internal
 
-/-- Solve a witness LP (constant-zero objective) for the existential
-binders. On success returns the primal `Array Rat` of size `binders.size`.
-On infeasibility returns `Except.error none`; on any non-`.optimal`,
-non-`.infeasible` outcome returns `Except.error (some msg)`.
+/-- Solve a witness LP for the existential binders. Each row carries a `strict`
+flag: a `true` row `coeffsᵀ x + const ≤ 0` must be satisfied *strictly*
+(`< 0`) by the returned witness.
 
-Pre: `lpRows` is in `≤ 0` form (`coeffsᵀ x + const ≤ 0`). -/
-def solveWitnessLP (lpRows : Array LinExpr) (binders : Array FVarId) :
+When no row is strict the LP has a constant-zero objective — any feasible
+point is optimal. When some row is strict, we maximize a bounded slack `s`
+(`s ≤ 1`) tightening each strict row to `coeffsᵀ x + s ≤ -const`
+(`buildStrictProblem`); a certified optimum with `s > 0` gives a witness
+that satisfies every strict row strictly (`coeffsᵀ x + const ≤ -s < 0`),
+while non-strict rows stay at `≤ 0`. An optimum with `s ≤ 0` means no
+strictly-feasible point exists, reported as infeasible.
+
+On success returns the primal `Array Rat` of size `binders.size` (the margin
+column, when present, is dropped). On infeasibility returns `Except.error
+none`; on any non-`.optimal`, non-`.infeasible` outcome returns
+`Except.error (some msg)`.
+
+Pre: every `lpRows` entry is in `≤ 0` form (`coeffsᵀ x + const ≤ 0`). -/
+def solveWitnessLP (lpRows : Array (LinExpr × Bool)) (binders : Array FVarId) :
     MetaM (Except (Option String) (Array Rat)) := do
   if lpRows.size = 0 then
     -- No constraints: any witness works; pick `0` for each binder.
     return .ok (Array.replicate binders.size (0 : Rat))
   let bIdx := mkVarIdx binders
-  let rowDense := lpRows.map (·.toDense bIdx)
-  let rowConsts := lpRows.map (·.const)
-  let objCoeffs := Array.replicate binders.size (0 : Rat)
+  let rowDense := lpRows.map (·.1.toDense bIdx)
+  let rowConsts := lpRows.map (·.1.const)
+  let strictFlags := lpRows.map (·.2)
   have hSize : rowDense.size = rowConsts.size := by
     simp [rowDense, rowConsts]
-  let p := buildProblem rowDense rowConsts objCoeffs 0 binders.size hSize
   let opts : Options := { ({} : Options) with sense := .maximize, presolve := false }
-  let normalized ←
-    match validate p with
-    | .error e => return .error (some s!"invalid generated problem: {repr e}")
-    | .ok p => pure p
-  let sol ←
-    match ← LP.dispatchSolveExact opts normalized (← getBackendOverride) with
-    | .error e => return .error (some s!"solveExact failed: {repr e}")
-    | .ok sol => pure sol
-  match sol.status with
-  | .optimal =>
-      let some pr := sol.certificate.primal
-        | return .error (some "SoPlex reported optimal but returned no primal certificate")
-      return .ok pr.toArray
-  | .infeasible => return .error none
-  | .unbounded =>
-      -- Cannot arise for a constant-zero objective. Treat as a
-      -- solver/verifier invariant violation.
-      return .error (some "SoPlex reported `unbounded` for a constant-zero objective; treating as an unchecked invariant violation")
-  | s => return .error (some s!"solver outcome was unchecked: {repr s}")
+  if strictFlags.any (·) then
+    -- Strict rows present: maximize the slack `s` and accept iff its certified
+    -- value is positive (so each strict row holds strictly at the witness).
+    let pS := buildStrictProblem rowDense rowConsts strictFlags binders.size hSize
+    let normalized ←
+      match validate pS with
+      | .error e => return .error (some s!"invalid generated problem: {repr e}")
+      | .ok p => pure p
+    let sol ←
+      match ← LP.dispatchSolveExact opts normalized (← getBackendOverride) with
+      | .error e => return .error (some s!"solveExact failed: {repr e}")
+      | .ok sol => pure sol
+    match sol.status with
+    | .optimal =>
+        let some pr := sol.certificate.primal
+          | return .error (some "SoPlex reported optimal but returned no primal certificate")
+        let primal := pr.toArray
+        -- The margin LP has `binders.size + 1` columns (the witness columns
+        -- `0 .. binders.size-1` plus the margin column `binders.size`); guard the
+        -- shape so a malformed primal is a clean error, not a panic.
+        unless primal.size == binders.size + 1 do
+          return .error (some s!"strict witness LP returned {primal.size} primal entries, expected {binders.size + 1}")
+        -- Recompute the margin from the primal (we do not trust the solver's
+        -- objective) and accept only if it is positive, so each strict row holds
+        -- strictly at the witness.
+        let margin := primal[binders.size]!
+        unless decide (0 < margin) do return .error none
+        return .ok (primal.extract 0 binders.size)
+    | .infeasible => return .error none
+    | .unbounded =>
+        -- Cannot arise: the margin column is bounded above by `1`. Treat as a
+        -- solver/verifier invariant violation.
+        return .error (some "SoPlex reported `unbounded` for the bounded-margin witness LP; treating as an unchecked invariant violation")
+    | s => return .error (some s!"solver outcome was unchecked: {repr s}")
+  else
+    let objCoeffs := Array.replicate binders.size (0 : Rat)
+    let p := buildProblem rowDense rowConsts objCoeffs 0 binders.size hSize
+    let normalized ←
+      match validate p with
+      | .error e => return .error (some s!"invalid generated problem: {repr e}")
+      | .ok p => pure p
+    let sol ←
+      match ← LP.dispatchSolveExact opts normalized (← getBackendOverride) with
+      | .error e => return .error (some s!"solveExact failed: {repr e}")
+      | .ok sol => pure sol
+    match sol.status with
+    | .optimal =>
+        let some pr := sol.certificate.primal
+          | return .error (some "SoPlex reported optimal but returned no primal certificate")
+        return .ok pr.toArray
+    | .infeasible => return .error none
+    | .unbounded =>
+        -- Cannot arise for a constant-zero objective. Treat as a
+        -- solver/verifier invariant violation.
+        return .error (some "SoPlex reported `unbounded` for a constant-zero objective; treating as an unchecked invariant violation")
+    | s => return .error (some s!"solver outcome was unchecked: {repr s}")
 /-! ## Inner-`∀` elimination over x-independent guards.
 
 Extends the existential body grammar with subformulas of shape
@@ -73,7 +121,18 @@ Limitations:
   the universal body's `α(x)` and the guards. The two failure modes
   ("Outer parameter in body" vs "Outer parameter in guard") get
   separate diagnostics.
-- Strict universal guards and strict universal bodies are rejected.
+- Strict universal guards and strict universal bodies are supported on
+  the x-independent path: a strict guard relaxes to its closure for the
+  sup-LP (sound, since the actual region is smaller), and a strict body
+  marks its residual row `strict` so the witness LP places `x*` strictly
+  inside. Each residual `∀ y, G(x*, y) → atomic(x*, y)` is re-proved
+  post-splice by the top-level strict-aware Farkas machinery, so
+  soundness never rests on the witness LP's strict reasoning. This is a
+  conservative sufficient condition for witness selection, not a decision
+  procedure: a strict body whose sup over the *closed* region is attained
+  only on a strict guard face can be rejected even though a witness
+  exists. On the Benders (x-dependent guard) path strict guards and
+  strict bodies are still rejected (the cut machinery is non-strict).
 - Bilinear `x * y` terms in the universal body are rejected by the
   extractor (one side of `*` must be a reducibly-closed Rat scalar). -/
 
@@ -151,126 +210,30 @@ def runSupLP (yBinders : Array FVarId) (guardsLe : Array LinExpr)
       throwError "lp(∀): sup-LP outcome was unchecked: {repr s}"
 
 /-- Parse a universal guard expression into `≤ 0` directions over
-`xBinders ∪ yBinders` (1 row for `≤`, 2 for `=`). No validation against
-xBinder occurrence; the caller decides whether x-dependence is acceptable
-(the x-independent path rejects it; the Benders path accepts and routes
-to constraint generation). Strict guards and unparseable shapes are
-still rejected at this layer. -/
+`xBinders ∪ yBinders` (1 row for `≤`, 2 for `=`), paired with whether the
+guard was strict (`<`). No validation against xBinder occurrence; the
+caller decides whether x-dependence is acceptable (the x-independent path
+accepts strict guards and routes to a sup-LP; the Benders path rejects
+strict guards). A strict guard relaxes to its closure (`≤`) here: the
+sup-LP only needs the closed region (using a larger region for a sup
+bound is sound), and the actual strict guard is recovered by the
+post-splice atomic re-proof. Unparseable shapes are rejected at this
+layer. -/
 def parseGuardLinExprs (xBinders yBinders : Array FVarId) (carrier : Expr) (g : Expr) :
-    MetaM (Array LinExpr) := do
+    MetaM (Array LinExpr × Bool) := do
   let parsed ← (parseAtomic? g).run' { vars := xBinders ++ yBinders, carrier }
   match parsed with
   | none =>
-      throwError "lp(∀): universal guard must be a non-strict atomic Rat {
+      throwError "lp(∀): universal guard must be an atomic Rat {
         ""}(in)equality{indentExpr g}"
-  | some (.lt, _, _, _, _) =>
-      throwError "lp(∀): strict universal guard is not supported{indentExpr g}"
+  | some (.lt, _, _, lhs, rhs) =>
+      -- Strict guard: relax to its closure for the LP region; report strictness.
+      return (#[lhs.sub rhs], true)
   | some (.le, _, _, lhs, rhs) =>
-      return #[lhs.sub rhs]
+      return (#[lhs.sub rhs], false)
   | some (.eq, _, _, lhs, rhs) =>
       let d := lhs.sub rhs
-      return #[d, d.neg]
-
-/-- Parse a single universal guard expression as one or two `≤ 0`
-`LinExpr`s over `yBinders` only. Rejects strict guards, existential-binder
-references, and outer-parameter references (the latter would require
-parameter promotion, not currently supported).
-
-Entry point for the x-independent guard path; the Benders path uses
-`parseGuardLinExprs` directly and routes x-dependent guards to
-constraint generation. -/
-def parseUniversalGuard (xBinders yBinders : Array FVarId) (carrier : Expr) (g : Expr) :
-    MetaM (Array LinExpr) := do
-  let dirs ← parseGuardLinExprs xBinders yBinders carrier g
-  for L in dirs do
-    for (v, _) in L.coeffs do
-      if xBinders.any (· == v) then
-        let name := (← v.getDecl).userName
-        throwError "lp(∀): universal guard references existential binder `{name}`{
-          indentExpr g}; guards must be independent of `x`"
-      unless yBinders.any (· == v) do
-        let name := (← v.getDecl).userName
-        throwError "lp(∀): universal guard references outer Rat local `{name}`{
-          indentExpr g}; v1 does not promote outer parameters to sup-LP variables"
-  return dirs
-
-/-- Parse and solve one inner-`∀ y₁ … yₘ : Rat, G₁ → … → Gₖ →
-atomic(x, y)` subformula on the x-independent guard path. Returns the
-residual `≤ 0` rows (each with coeffs over `xBinders` only and a
-constant `γ + M`) to be added to the witness LP. A vacuous universal
-contributes zero rows.
-
-The fvars introduced by `forallTelescope` are local to this call; the
-returned `LinExpr`s only mention `xBinders`, which remain valid in the
-caller's scope. -/
-def parseAndSolveUniversal (xBinders : Array FVarId) (carrier : Expr) (forallExpr : Expr) :
-    MetaM (Array LinExpr) := do
-  let forallExpr ← whnf forallExpr
-  Meta.forallTelescopeReducing forallExpr fun args bodyAtom => do
-    -- Partition `args` into `yBinders` (type = Rat) and guard hypotheses
-    -- (Prop). The grammar `∀ y₁ … yₘ : Rat, G₁ → … → Gₖ → atomic`
-    -- requires all Rat binders to precede all guards.
-    let mut yBinders : Array FVarId := #[]
-    let mut guardExprs : Array Expr := #[]
-    let mut seenGuard : Bool := false
-    for arg in args do
-      let argId := arg.fvarId!
-      let decl ← argId.getDecl
-      let ty ← whnf decl.type
-      if ← isDefEq ty carrier then
-        if seenGuard then
-          throwError "lp(∀): universal `Rat` binders must precede guards in {
-            ""}`∀ y₁ … yₘ : Rat, G → … → atomic` shape{indentExpr forallExpr}"
-        yBinders := yBinders.push argId
-      else
-        seenGuard := true
-        guardExprs := guardExprs.push arg
-    if yBinders.isEmpty then
-      throwError "lp(∀): expected at least one `∀ y : Rat, _` binder{
-        indentExpr forallExpr}"
-    -- Parse guards.
-    let mut guardsLe : Array LinExpr := #[]
-    for hExpr in guardExprs do
-      let gType ← inferType hExpr
-      let dirs ← parseUniversalGuard xBinders yBinders carrier gType
-      guardsLe := guardsLe ++ dirs
-    -- Parse atomic body.
-    let parsedBody ← (parseAtomic? bodyAtom).run' { vars := xBinders ++ yBinders, carrier }
-    let some (rel, _, _, lhsLin, rhsLin) := parsedBody
-      | throwError "lp(∀): universal body must be a non-strict atomic Rat {
-          ""}(in)equality{indentExpr bodyAtom}"
-    if rel = .lt then
-      throwError "lp(∀): strict universal body is not supported{
-        indentExpr bodyAtom}"
-    let d := lhsLin.sub rhsLin
-    let bodyDirs : Array LinExpr :=
-      match rel with
-      | .le => #[d]
-      | .eq => #[d, d.neg]
-      | .lt => #[]
-    -- Validate body coeffs: only in `xBinders ∪ yBinders`. Any other
-    -- fvar (outer Rat local) triggers syntactic rejection.
-    for L in bodyDirs do
-      let (_, _, outside) := L.partitionXY xBinders yBinders
-      if outside.size > 0 then
-        let nameStrs ← outside.toList.mapM fun v => do
-          return s!"`{(← v.getDecl).userName}`"
-        throwError "lp(∀): outer Rat local(s) {String.intercalate ", " nameStrs} {
-          ""}appear in the universal body's `x`-dependent part{indentExpr bodyAtom}; {
-          ""}parametric witnesses are not supported"
-    -- Solve sup-LP per direction; collect residuals over `xBinders`.
-    let mut residuals : Array LinExpr := #[]
-    for bodyDir in bodyDirs do
-      let (β, α, _) := bodyDir.partitionXY xBinders yBinders
-      match ← runSupLP yBinders guardsLe β with
-      | .bounded M =>
-          residuals := residuals.push { const := α.const + M, coeffs := α.coeffs }
-      | .vacuous =>
-          -- No witness-LP constraint; the atomic-goal path discharges
-          -- the residual post-splice atomic from the (infeasible)
-          -- guards via `False.elim`.
-          pure ()
-    return residuals
+      return (#[d, d.neg], false)
 
 /-! ## Inner-`∀` with x-dependent guards via Benders.
 
@@ -477,8 +440,11 @@ structure BendersState where
   /-- Canonical keys of cuts already in the master. Append-only. -/
   cutKeys : Array (Array (FVarId × Int) × Int) := #[]
   /-- Master constraints: the `x`-independent body atoms plus all
-      accepted cuts, each in `≤ 0` form over `xBinders`. -/
-  masterRows : Array LinExpr := #[]
+      accepted cuts, each in `≤ 0` form over `xBinders`, paired with a
+      `strict` flag. Generated Benders cuts are always non-strict; a
+      `strict` master row comes only from the existential's own strict
+      atoms, carried in via `initialMaster`. -/
+  masterRows : Array (LinExpr × Bool) := #[]
   /-- Candidates already proposed by the master LP (deduplicated by
       vector equality). If the master proposes the same candidate twice
       the search is stuck. -/
@@ -506,7 +472,7 @@ message. The user-facing proof is built afterwards by the caller via
 `introExistsRat` + post-splice validation through the x-independent
 sup-LP machinery. -/
 partial def runBendersLoop (xBinders : Array FVarId)
-    (initialMaster : Array LinExpr) (universals : Array BendersUniversal) :
+    (initialMaster : Array (LinExpr × Bool)) (universals : Array BendersUniversal) :
     MetaM (Except (Option String) (Array Rat)) := do
   let mut state : BendersState :=
     { masterRows := initialMaster, cutKeys := #[], triedCandidates := #[], iter := 0 }
@@ -579,7 +545,11 @@ partial def runBendersLoop (xBinders : Array FVarId)
                    "the existing cut should already exclude — invariant violation."))
               state := { state with
                 cutKeys := state.cutKeys.push key
-                masterRows := state.masterRows.push cutLin }
+                -- Benders cuts are always non-strict (`≤ 0`); strict universal
+                -- bodies are rejected before reaching this path. Strict rows in
+                -- the master come only from the existential's own strict atoms,
+                -- carried in `initialMaster`.
+                masterRows := state.masterRows.push (cutLin, false) }
               anyViolation := true
               break
     if !anyViolation then
@@ -592,8 +562,9 @@ partial def runBendersLoop (xBinders : Array FVarId)
 guard mentions an existential binder. -/
 inductive UniversalDispatch
   | /-- All guards are x-independent → residual `≤ 0` rows on `xBinders`
-       that join the witness LP directly. -/
-    independentGuards (residuals : Array LinExpr)
+       that join the witness LP directly, each paired with a `strict`
+       flag (a strict universal body yields a strict residual row). -/
+    independentGuards (residuals : Array (LinExpr × Bool))
   | /-- At least one guard mentions an existential binder → Benders
        subproblems (one per body direction). -/
     dependentGuards (universals : Array BendersUniversal)
@@ -625,12 +596,15 @@ def classifyUniversal (xBinders : Array FVarId) (carrier : Expr) (forallExpr : E
     if yBinders.isEmpty then
       throwError "lp(∀): expected at least one `∀ y : Rat, _` binder{
         indentExpr forallExpr}"
-    -- Parse guards as `Array LinExpr` (no x/y validation yet).
+    -- Parse guards as `Array LinExpr` (no x/y validation yet), tracking whether
+    -- any guard was strict (`<`).
     let mut allGuardDirs : Array LinExpr := #[]
+    let mut anyStrictGuard := false
     for hExpr in guardExprs do
       let gType ← inferType hExpr
-      let dirs ← parseGuardLinExprs xBinders yBinders carrier gType
+      let (dirs, strict) ← parseGuardLinExprs xBinders yBinders carrier gType
       allGuardDirs := allGuardDirs ++ dirs
+      anyStrictGuard := anyStrictGuard || strict
     -- Validate guard scope: each coefficient must be in `xBinders ∪ yBinders`.
     -- Outer Rat parameters in any guard are rejected (numeric-witness restriction).
     let mut anyXInGuard := false
@@ -647,16 +621,19 @@ def classifyUniversal (xBinders : Array FVarId) (carrier : Expr) (forallExpr : E
     -- Parse body atomic.
     let parsedBody ← (parseAtomic? bodyAtom).run' { vars := xBinders ++ yBinders, carrier }
     let some (rel, _, _, lhsLin, rhsLin) := parsedBody
-      | throwError "lp(∀): universal body must be a non-strict atomic Rat {
+      | throwError "lp(∀): universal body must be an atomic Rat {
           ""}(in)equality{indentExpr bodyAtom}"
-    if rel = .lt then
-      throwError "lp(∀): strict universal body is not supported{indentExpr bodyAtom}"
+    -- A strict (`<`) body is supported on the x-independent path: its residual
+    -- row is marked strict so the witness LP places `x*` strictly inside. On the
+    -- Benders (x-dependent guard) path strict bodies and strict guards are
+    -- rejected below — the cut machinery is non-strict there.
+    let bodyStrict := rel = .lt
     let d := lhsLin.sub rhsLin
     let bodyDirs : Array LinExpr :=
       match rel with
       | .le => #[d]
+      | .lt => #[d]
       | .eq => #[d, d.neg]
-      | .lt => #[]
     -- Validate body coeffs: only in `xBinders ∪ yBinders`. The
     -- numeric-witness restriction is enforced here too.
     for L in bodyDirs do
@@ -670,17 +647,29 @@ def classifyUniversal (xBinders : Array FVarId) (carrier : Expr) (forallExpr : E
     if !anyXInGuard then
       -- x-independent guards: solve a sup-LP per body direction and
       -- contribute residual `≤ 0` rows on `xBinders` to the witness LP.
-      let mut residuals : Array LinExpr := #[]
+      let mut residuals : Array (LinExpr × Bool) := #[]
       for bodyDir in bodyDirs do
         let (β, α, _) := bodyDir.partitionXY xBinders yBinders
         match ← runSupLP yBinders allGuardDirs β with
         | .bounded M =>
-            residuals := residuals.push { const := α.const + M, coeffs := α.coeffs }
+            residuals := residuals.push ({ const := α.const + M, coeffs := α.coeffs }, bodyStrict)
         | .vacuous => pure ()
       return .independentGuards residuals
-    -- At least one guard mentions an x-binder: build one BendersUniversal
-    -- per body direction. Each direction shares the same guard data;
-    -- only the body splits differ for an `=` body.
+    -- At least one guard mentions an x-binder → Benders path. Strictness is not
+    -- supported here: the constraint-generation cuts are derived in non-strict
+    -- (`≤ 0`) form, and a strict guard / body would need a strict-aware cut and
+    -- duplicate-key scheme this path does not implement. Reject with a targeted
+    -- message (the x-independent path and the existential's own atoms keep full
+    -- strict support).
+    if anyStrictGuard then
+      throwError "lp(∀): a strict (`<`) guard in a universal routed to the {
+        ""}Benders (x-dependent guard) path is not supported; the Benders path {
+        ""}uses non-strict cuts{indentExpr forallExpr}"
+    if bodyStrict then
+      throwError "lp(∀): a strict (`<`) universal body under an x-dependent {
+        ""}guard (Benders path) is not supported{indentExpr forallExpr}"
+    -- Build one BendersUniversal per body direction. Each direction shares the
+    -- same guard data; only the body splits differ for an `=` body.
     let mut guardY : Array LinExpr := #[]
     let mut guardX : Array LinExpr := #[]
     for L in allGuardDirs do
