@@ -69,6 +69,62 @@ def solveInconsistent (g : MVarId) (target : Expr) : TacticM Unit := g.withConte
   throwError "lp: goal{indentExpr target}\nis not an atomic comparison, and the hypotheses {
       ""}over {carriers.toList} are not inconsistent"
 
+/-- An equality goal `lhs = ?m` (or `?m = rhs`) one side of which is a bare unassigned
+metavariable: `linarith` closes these by *assigning* the metavariable, rather than by
+proving an entailment. Faced with `concrete = ?m` it picks the value `v` that the
+hypotheses force `concrete` to equal and assigns `?m := v`; the chosen `v` is an existing
+context term (e.g. `?m := p` when `n + n' = p` reduces `m + -1 + n'` to `p`), NOT the
+verbatim `concrete` side. That distinction matters: the assigned value flows on into the
+surrounding elaboration (e.g. it fixes the degree of a cochain a later `simp` lemma must
+match), so a verbatim `?m := concrete` would type-check the equality yet derail the
+surrounding proof. `lp` otherwise atomizes `?m` as an opaque carrier term and rejects it.
+
+We mirror `linarith` by *searching* the carrier-typed local variables for a `v` with
+`concrete = v` provable, reusing `solveAtomic` as the prover, then assigning `?m := v`.
+Returns `true` when handled. The strict witness case (`m < ?m`, which `linarith` closes by
+finding a hypothesis-derived upper bound) is left to the normal path; over the resurvey it
+also needs ℕ↔ℤ cast bridging `lp` does not yet do, so it still throws `unsupported
+expression`. -/
+def solveEqMVar? (g : MVarId) (rawGoal : Expr) : TacticM Bool := g.withContext do
+  let goal := rawGoal.consumeMData
+  let args := goal.getAppArgs
+  -- `@Eq α lhs rhs`.
+  unless goal.isAppOf ``Eq && args.size == 3 do return false
+  let α := args[0]!
+  unless ← isCarrierType α do return false
+  let lhs ← instantiateMVars args[1]!
+  let rhs ← instantiateMVars args[2]!
+  -- Exactly one side a bare unassigned metavariable, the other metavariable-free.
+  let some (mvarSide, concrete) :=
+      if rhs.isMVar && !lhs.hasExprMVar then some (rhs, lhs)
+      else if lhs.isMVar && !rhs.hasExprMVar then some (lhs, rhs)
+      else none
+    | return false
+  -- Candidate values: the carrier-typed local variables (`linarith` only ever assigns the
+  -- metavariable to such an existing term). For each, prove `concrete = v` with the full
+  -- `solveAtomic` machinery on a throwaway goal; the first `v` that closes is the assignment.
+  -- Each attempt runs inside a saved state that is rolled back on failure, so a candidate that
+  -- partially solves (or whose defeq checks assign shared metavariables) before throwing cannot
+  -- leak that into the next attempt or the surrounding proof.
+  let s ← saveState
+  for decl in ← getLCtx do
+    if decl.isImplementationDetail then continue
+    let v := decl.toExpr
+    -- A data variable of the carrier (skip props and other types). `withNewMCtxDepth` keeps the
+    -- type check from assigning `mvarSide` (or any goal metavariable) as a side effect.
+    unless ← withNewMCtxDepth (isDefEq (← inferType v) α) do continue
+    let progressed ← (do
+        let probe ← mkFreshExprMVar (← mkAppM ``Eq #[concrete, v])
+        solveAtomic probe.mvarId!
+        -- `concrete = v` proved. Pin the metavariable to `v` (defeq assignment) and discharge
+        -- the original goal with that proof (its type is now defeq to the goal).
+        unless ← isDefEq mvarSide v do return false
+        g.assign (← instantiateMVars probe)
+        return true) <|> pure false
+    if progressed then return true
+    s.restore
+  return false
+
 partial def solveGoal (g : MVarId) : TacticM Unit := do
   let (_, g) ← g.intros
   g.withContext do
@@ -87,6 +143,10 @@ partial def solveGoal (g : MVarId) : TacticM Unit := do
       -- back to certifying the hypotheses inconsistent. Decide on the RAW goal
       -- type (the `whnfR` `target` may have unfolded a `Rat` `≤` to a `Bool` `=`).
       let rawGoal ← instantiateMVars (← g.getType)
+      -- An equality goal with an unassigned metavariable on one side: `linarith` closes it
+      -- by assigning the metavariable. Do the same before the atomic dispatch (which would
+      -- otherwise atomize `?m` and reject it as an `unsupported expression`).
+      if ← solveEqMVar? g rawGoal then return
       -- Treat the goal as an atom only when its relation type ACTUALLY carries the
       -- arithmetic structure: a comparison/`Eq` whose carrier is a non-arithmetic type
       -- (e.g. `x = y` for `x y : X` a topological space) is not an `lp` atom — committing
