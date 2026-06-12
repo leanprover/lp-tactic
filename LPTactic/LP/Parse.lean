@@ -382,6 +382,24 @@ def parseAtomic? (type : Expr) : ParseM (Option (Rel × Expr × Expr × LinExpr 
   | _ => pure ()
   return none
 
+/-- If `type` is a negated proposition `¬ P` — written as `Not P`, `P → False`, or
+`Ne a b` (returning the underlying `a = b`) — return `P`, else `none`. Used to recognise
+negated comparison hypotheses (linarith's `removeNegations`): `¬ (a ≤ b)`, `¬ (a < b)`,
+`a ≠ b`. -/
+def notInner? (type : Expr) : MetaM (Option Expr) := do
+  match type.getAppFn with
+  | .const ``Not _ =>
+      let args := type.getAppArgs
+      return if args.size == 1 then some args[0]! else none
+  | .const ``Ne _ =>
+      let args := type.getAppArgs
+      if args.size == 3 then return some (← mkAppM ``Eq #[args[1]!, args[2]!]) else return none
+  | _ =>
+      if type.isArrow && type.bindingBody!.isConstOf ``False then
+        return some type.bindingDomain!
+      else
+        return none
+
 def isAnd? (type : Expr) : Option (Expr × Expr) :=
   let fn := type.getAppFn
   let args := type.getAppArgs
@@ -420,6 +438,20 @@ partial def collectHypProof (origin : Name) (proof : Expr) :
     let left ← mkAppM ``And.left #[proof]
     let right ← mkAppM ``And.right #[proof]
     return (← collectHypProof origin left) ++ (← collectHypProof origin right)
+  -- Negated comparison (linarith's `removeNegations`): contribute the flipped row,
+  -- wrapping the hypothesis with the core `Grind.Order.lt_of_not_le`/`le_of_not_lt`
+  -- conversions and feeding the positive comparison back through the existing machinery
+  -- (so the carrier dispatch, strict tagging, and `Nat` no-subtraction path are all reused).
+  -- `¬ (a ≤ b)` ⟶ `b < a` (strict),
+  -- `¬ (a < b)` ⟶ `b ≤ a`; `¬ (a ≥ b)`/`¬ (a > b)` flip the same way. `a ≠ b` is a
+  -- disequality with no single linear row, so it contributes nothing (as a bare `≠` does).
+  if let some inner ← notInner? type then
+    match inner.getAppFn with
+    | .const ``LE.le _ | .const ``GE.ge _ =>
+        return ← collectHypProof origin (← mkAppM ``Lean.Grind.Order.lt_of_not_le #[proof])
+    | .const ``LT.lt _ | .const ``GT.gt _ =>
+        return ← collectHypProof origin (← mkAppM ``Lean.Grind.Order.le_of_not_lt #[proof])
+    | _ => return #[]
   match ← parseAtomic? type with
   | none => return #[]
   | some (.lt, lhsExpr, rhsExpr, lhs, rhs) =>
