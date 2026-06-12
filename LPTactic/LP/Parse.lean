@@ -75,8 +75,13 @@ in tactic-side work. Skipping `HAdd`/`HSub` keeps every call bounded by
 the maximal *scalar-only* subtree: a row body (`HAdd` head) is rejected
 in O(1), and a coefficient like `1/3` or `c` is still recognized. A
 genuinely compound `(2+3) * x` is not short-circuited here, but
-`normalize` still handles it via its structural `HAdd` path. -/
-partial def quickScalarLit? (e : Expr) : MetaM (Option Rat) := do
+`normalize` still handles it via its structural `HAdd` path.
+
+`allowDiv` mirrors `ScalarCaps`: on `Int`/`Nat` (`allowDiv := false`) a `/`/`⁻¹` is
+floor/integer division, NOT a rational scalar — so a closed `5 / 2` is NOT the scalar
+`2.5`. The parser atomizes those, and the normalizer (whose `scalarLit?` is this) must
+agree, or the two models diverge (a `Int.ofNat 5` rendered for an atomized `5 / 2`). -/
+partial def quickScalarLit? (e : Expr) (allowDiv : Bool := true) : MetaM (Option Rat) := do
   if let some v ← tryQToRat? e then return some v
   -- Match `parseScalar?`'s reducible `whnf` so a reducibly-wrapped scalar (a `@[reducible]`
   -- abbrev, a cast, …) is recognized identically by the parser and the certificate normalizer.
@@ -87,7 +92,7 @@ partial def quickScalarLit? (e : Expr) : MetaM (Option Rat) := do
   match e with
   | .fvar id =>
       match ← fvarLetValue? id with
-      | some value => quickScalarLit? value
+      | some value => quickScalarLit? value allowDiv
       | none => return none
   | _ =>
     let fn := e.getAppFn
@@ -97,18 +102,18 @@ partial def quickScalarLit? (e : Expr) : MetaM (Option Rat) := do
       | .lit (.natVal n) => return some (OfNat.ofNat n)
       | _ => return none
     if fn.isConstOf ``Neg.neg && args.size == 3 then
-      return (← quickScalarLit? args[2]!).map (fun x => -x)
+      return (← quickScalarLit? args[2]! allowDiv).map (fun x => -x)
     if fn.isConstOf ``HMul.hMul && args.size == 6 then
-      match ← quickScalarLit? args[4]!, ← quickScalarLit? args[5]! with
+      match ← quickScalarLit? args[4]! allowDiv, ← quickScalarLit? args[5]! allowDiv with
       | some a, some b => return some (a * b)
       | _, _ => return none
-    if fn.isConstOf ``HDiv.hDiv && args.size == 6 then
-      match ← quickScalarLit? args[4]!, ← quickScalarLit? args[5]! with
+    if allowDiv && fn.isConstOf ``HDiv.hDiv && args.size == 6 then
+      match ← quickScalarLit? args[4]! allowDiv, ← quickScalarLit? args[5]! allowDiv with
       | some _, some 0 => return none
       | some a, some b => return some (a / b)
       | _, _ => return none
-    if fn.isConstOf ``Inv.inv && args.size == 3 then
-      match ← quickScalarLit? args[2]! with
+    if allowDiv && fn.isConstOf ``Inv.inv && args.size == 3 then
+      match ← quickScalarLit? args[2]! allowDiv with
       | some 0 => return none
       | some a => return some (1 / a)
       | none => return none
@@ -184,12 +189,10 @@ partial def parseScalar? (caps : ScalarCaps) (e : Expr) : MetaM (Option Rat) := 
             | some a, some b => return some (a + b)
             | _, _ => return none
       | .const ``HSub.hSub _ =>
-          -- Truncating `Nat.sub` cannot be modelled by the LP; reject outright.
-          unless caps.allowSub do
-            throwError "lp: subtraction over `{caps.carrier}` is truncating (`Nat.sub`) {
-              ""}and is not supported by `lp`; use `cutsat` (or `omega`) for goals {
-              ""}involving `Nat` subtraction"
-          if args.size == 6 then
+          -- Truncating `Nat.sub` is not a `Rat` subtraction: return `none` here so
+          -- `parseInto` atomizes the whole `a - b` (the rejection-with-`cutsat`-hint now
+          -- fires only where atomization is off, e.g. the binder frontends).
+          if caps.allowSub && args.size == 6 then
             match ← parseScalar? caps args[4]!, ← parseScalar? caps args[5]! with
             | some a, some b => return some (a - b)
             | _, _ => return none
@@ -199,12 +202,10 @@ partial def parseScalar? (caps : ScalarCaps) (e : Expr) : MetaM (Option Rat) := 
             | some a, some b => return some (a * b)
             | _, _ => return none
       | .const ``HDiv.hDiv _ =>
-          -- `Int`/`Nat` `/` is integer/floor division, not the rational quotient.
-          unless caps.allowDiv do
-            throwError "lp: division over `{caps.carrier}` is integer/truncating division {
-              ""}and is not supported by `lp`; use `cutsat` (or `omega`) for goals {
-              ""}involving `Int`/`Nat` division"
-          if args.size == 6 then
+          -- `Int`/`Nat` `/` is integer/floor division, not the rational quotient: return
+          -- `none` so `parseInto` atomizes the whole quotient (rejection-with-hint fires
+          -- only where atomization is off).
+          if caps.allowDiv && args.size == 6 then
             match ← parseScalar? caps args[4]!, ← parseScalar? caps args[5]! with
             | some _, some 0 => return none
             | some a, some b => return some (a / b)
@@ -268,6 +269,29 @@ def atomIntoOrThrow (acc : LinAcc) (k : Rat) (e : Expr) (msg : MessageData) :
     return acc.addCoeff fv k
   throwError msg
 
+/-- The `cutsat`/`omega` hint for a truncating `Nat`-subtraction subterm. Thrown by the
+binder frontends (atomization off); on the atomic path the subterm atomizes instead and
+the hint is re-surfaced by `solveAtomic` only if the residual LP fails to close. -/
+def subTruncMsg (carrier : Expr) : MessageData :=
+  m!"lp: subtraction over `{carrier}` is truncating (`Nat.sub`) {
+    ""}and is not supported by `lp`; use `cutsat` (or `omega`) for goals {
+    ""}involving `Nat` subtraction"
+
+/-- The `cutsat`/`omega` hint for an `Int`/`Nat` floor-division (or `%`) subterm. -/
+def divTruncMsg (carrier : Expr) : MessageData :=
+  m!"lp: division/`%` over `{carrier}` is integer/truncating division {
+    ""}and is not supported by `lp`; use `cutsat` (or `omega`) for goals {
+    ""}involving `Int`/`Nat` division"
+
+/-- Atomize a subterm whose head operation the carrier does NOT model exactly
+(truncating `Nat`-subtraction, `Int`/`Nat` floor-`/`/`%`). Records that a truncating
+atom was introduced so a failed solve can re-surface the `cutsat` hint, then atomizes
+`e` (or, where atomization is off / the atom is unhygienic, throws `msg` now). -/
+def atomTruncatingInto (acc : LinAcc) (k : Rat) (e : Expr) (msg : MessageData) :
+    ParseM LinAcc := do
+  modify fun s => { s with truncatingAtoms := true }
+  atomIntoOrThrow acc k e msg
+
 /-- Accumulating affine parser: add `k * e` into `acc` in a single pass over the
 syntax tree. The scalar multiplier `k` threads through `-`/`neg`/scalar-`*`/`/ c`
 nodes, so no intermediate per-subtree `LinExpr`s are built or merged. -/
@@ -297,9 +321,12 @@ partial def parseInto (caps : ScalarCaps) (acc : LinAcc) (k : Rat) (e : Expr) :
           if args.size == 6 then
             return ← parseInto caps (← parseInto caps acc k args[4]!) k args[5]!
       | .const ``HSub.hSub _ =>
-          -- `parseScalar?` above already rejects `Nat` subtraction; ring carriers
-          -- (`Int`/`Dyadic`/field) reach here and subtract exactly.
+          -- Truncating `Nat`-subtraction cannot be descended into as exact subtraction;
+          -- atomize the whole `a - b` opaquely. Ring carriers (`Int`/`Dyadic`/field)
+          -- subtract exactly and descend.
           if args.size == 6 then
+            unless caps.allowSub do
+              return ← atomTruncatingInto acc k eOrig (subTruncMsg caps.carrier)
             return ← parseInto caps (← parseInto caps acc k args[4]!) (-k) args[5]!
       | .const ``Neg.neg _ =>
           if args.size == 3 then
@@ -319,16 +346,24 @@ partial def parseInto (caps : ScalarCaps) (acc : LinAcc) (k : Rat) (e : Expr) :
               return ← parseInto caps acc (k * c) lhs
             return ← atomIntoOrThrow acc k eOrig "lp: nonlinear multiplication; one side of `*` must be a reducibly-closed scalar"
       | .const ``HDiv.hDiv _ =>
-          -- `e / c` with `c` a reducibly-closed nonzero scalar is the affine `(1/c) • e`
-          -- (e.g. `x / 2`), kept linear rather than atomized. `Int`/`Nat` `/` is integer
-          -- division, rejected by `parseScalar?` above. Division by a non-constant
-          -- (`2 / x`, `x / y`) stays unsupported here (atomized once that lands).
+          -- `Int`/`Nat` `/` is floor division — even `x / 2` is NOT the affine `(1/2)•x`,
+          -- so atomize the whole quotient opaquely. On a field/`Rat` carrier, `e / c` with
+          -- `c` a reducibly-closed nonzero scalar IS the affine `(1/c) • e` (e.g. `x / 2`),
+          -- kept linear; division by a non-constant (`2 / x`, `x / y`) atomizes.
           if args.size == 6 then
+            unless caps.allowDiv do
+              return ← atomTruncatingInto acc k eOrig (divTruncMsg caps.carrier)
             if let some c ← parseScalar? caps args[5]! then
               if c == 0 then
                 throwError "lp: division by the zero constant"
               return ← parseInto caps acc (k / c) args[4]!
           return ← atomIntoOrThrow acc k eOrig "lp: division is outside the supported affine grammar"
+      | .const ``HMod.hMod _ =>
+          -- `Int`/`Nat` `%` is truncating/modular; atomize the whole `a % b` opaquely
+          -- (with the `cutsat` hint on a failed solve). Other carriers' `%` (rare) falls
+          -- through to the generic atomizer below.
+          if args.size == 6 && !caps.allowDiv then
+            return ← atomTruncatingInto acc k eOrig (divTruncMsg caps.carrier)
       | _ => pure ()
       let carrier := (← get).carrier
       atomIntoOrThrow acc k eOrig m!"lp: unsupported {carrier} expression{indentExpr e}"

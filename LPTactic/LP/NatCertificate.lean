@@ -24,7 +24,9 @@ def mkNatNum (r : Rat) : Expr := mkRawNatLit r.num.toNat
 partial def natScalarLit? (e : Expr) : MetaM (Option Rat) := do
   match e with
   | .lit (.natVal n) => return some (n : Rat)
-  | _ => quickScalarLit? e
+  -- `Nat` `/` is floor division: a closed `5 / 2` is NOT the scalar `2.5` (the parser
+  -- atomizes it), so the scalar recognizer must not fold `/` either.
+  | _ => quickScalarLit? e (allowDiv := false)
 
 @[inline] def nLemma (name : Name) (args : Array Expr) : Expr :=
   mkAppN (mkConst ((`LP.Tactic.LP.Internal.NatC).append name)) args
@@ -55,7 +57,9 @@ def mkNCtx : MetaM NCtx := do
     proveLitEq := fun e _r => pure (natRefl e)
     applyLemma := nLemma
     mkEqTrans := fun aE bE cE p q =>
-      mkApp6 (mkConst ``Eq.trans [Level.succ Level.zero]) nat aE bE cE p q }
+      mkApp6 (mkConst ``Eq.trans [Level.succ Level.zero]) nat aE bE cE p q
+    -- `Nat` truncates subtraction and floor-divides; both are atomized, never descended.
+    allowSub := false, allowDiv := false }
   return { m, leFn, ltFn }
 
 @[inline] def NCtx.mkLe (c : NCtx) (a b : Expr) : Expr := mkApp2 c.leFn a b

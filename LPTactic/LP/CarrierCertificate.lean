@@ -55,6 +55,12 @@ structure CarrierMethods where
   for ordinary atoms, or the stored opaque-atom `Expr` for a virtual fvar). Injected by
   the atomic path; empty for the binder frontends. -/
   atoms : AtomTable := {}
+  /-- Whether the carrier subtracts/divides exactly (mirrors `ScalarCaps`). For a carrier
+  that does NOT (`Nat`-`Sub`; `Int`/`Nat`-`Div`), the parser atomized the whole `a - b` /
+  `a / b` subterm rather than descending, so the normalizer must atomize it identically —
+  descending here would diverge from the parse (and, for `Nat`, build a `Neg` it lacks). -/
+  allowSub : Bool := true
+  allowDiv : Bool := true
 
 namespace CarrierMethods
 
@@ -289,6 +295,9 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
           return (L, m.mkEqTrans e (m.mkAdd rA rB) rL step1 pm, rL)
       | .const ``HSub.hSub _ =>
           unless args.size == 6 do return ← m.normalizeAtom e
+          -- Truncating `Nat`-subtraction was atomized by the parser, not descended into
+          -- as `a + (-b)` (`Nat` has no `Neg`); atomize the whole `a - b` to match.
+          unless m.allowSub do return ← m.normalizeAtom e
           let aE := args[4]!; let bE := args[5]!
           let (La, pa, rA) ← m.normalizeR vidx aE
           let (Lb, pb, rB) ← m.normalizeR vidx bE
@@ -362,6 +371,10 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
             m.normalizeAtom e
       | .const ``HDiv.hDiv _ =>
           unless args.size == 6 do return ← m.normalizeAtom e
+          -- `Int`/`Nat` floor-division was atomized by the parser (even `x / 2`: it is NOT
+          -- the rational `(1/2)•x`), so atomize the whole quotient here rather than taking
+          -- the `c⁻¹ * e` scalar path below.
+          unless m.allowDiv do return ← m.normalizeAtom e
           let dividend := args[4]!; let divisor := args[5]!
           -- `e / c = c⁻¹ * e` (true even at `c = 0`); recurse through the scalar-mul
           -- path, which recognises the closed inverse `c⁻¹` as the scalar `1/c`.

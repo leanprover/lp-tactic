@@ -268,6 +268,12 @@ structure ParseState where
   by canonical atom `Expr` so identical atoms share a variable. -/
   atomToFVar : Std.HashMap Expr FVarId := {}
   fvarToAtom : Std.HashMap FVarId Expr := {}
+  /-- Set when the parser atomized a subterm whose head operation the carrier does NOT
+  model exactly — truncating `Nat`-subtraction or `Int`/`Nat` floor-division/`%`. The
+  atom carries no arithmetic, so a goal that genuinely needs truncation semantics will
+  fail to solve; `solveAtomic` reads this to re-surface the `cutsat`/`omega` hint at the
+  point of failure (instead of the parser rejecting the call outright). -/
+  truncatingAtoms : Bool := false
   deriving Inhabited
 
 /-- The atom-table half the certificate normalizer needs: virtual-fvar → atom `Expr`

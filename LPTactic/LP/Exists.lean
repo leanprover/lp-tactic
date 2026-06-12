@@ -121,22 +121,25 @@ objective (`max 0 subject to H`) so we probe only the consistency of `H`; the ca
 def tryHypsInconsistent (ops : CarrierOps) (rows : Array Row) (vars : Array FVarId)
     (goalType : Expr) (atoms : AtomTable := {}) : MetaM (Option Expr) := do
   if rows.size = 0 then return none
-  -- Zero-variable special case: every row is a closed fact. A `≤` row with `const > 0` is
-  -- itself `False` (`0 < const ≤ 0`); a strict (`<`) row with `const ≥ 0` is itself `0 < 0`
-  -- (`const < 0` but `const ≥ 0`). Either way, certify with multiplier 1 on that row.
-  -- (SoPlex aborts on 0-column problems, so we never call it here.)
-  if vars.size = 0 then
-    for h : i in [0:rows.size] do
-      let c := rows[i].expr.const
-      let contradictory := if rows[i].strict then decide (0 ≤ c) else decide (0 < c)
-      if isLinExprClosed rows[i].expr && contradictory then
-        let mults := (Array.replicate rows.size (0 : Rat)).set! i 1
-        -- Best-effort: a strict (`c = 0`) row over a carrier whose assembler lacks strict
-        -- support (`Nat`) throws — skip it and keep scanning for a usable row
-        -- (e.g. a later non-strict `c > 0` contradiction that every carrier handles).
-        try return some (← ops.assembleInfeasible rows mults vars goalType atoms)
-        catch _ => pure ()
-    return none
+  -- Closed contradictory row: a single row that is closed and contradictory certifies
+  -- inconsistency on its own (multiplier 1 on it, 0 elsewhere). A `≤` row with `const > 0`
+  -- is itself `False` (`0 < const ≤ 0`); a strict (`<`) row with `const ≥ 0` is itself
+  -- `0 < 0`. This runs FIRST, regardless of `vars.size`: spectator variables from atomized
+  -- hypotheses (an irrelevant `Nat.sub`/`Int.div` fact kept opaque by #47) do not change
+  -- that a closed-false row is false, and this check needs no LP solve — so the goal still
+  -- closes backend-free, as it did before the offending hypothesis introduced a column.
+  -- (SoPlex also aborts on 0-column problems, so the `vars.size = 0` case must not call it.)
+  for h : i in [0:rows.size] do
+    let c := rows[i].expr.const
+    let contradictory := if rows[i].strict then decide (0 ≤ c) else decide (0 < c)
+    if isLinExprClosed rows[i].expr && contradictory then
+      let mults := (Array.replicate rows.size (0 : Rat)).set! i 1
+      -- Best-effort: a strict (`c = 0`) row over a carrier whose assembler lacks strict
+      -- support (`Nat`) throws — skip it and keep scanning for a usable row
+      -- (e.g. a later non-strict `c > 0` contradiction that every carrier handles).
+      try return some (← ops.assembleInfeasible rows mults vars goalType atoms)
+      catch _ => pure ()
+  if vars.size = 0 then return none
   let vidx := mkVarIdx vars
   let rowDense := rows.map (·.expr.toDense vidx)
   let rowConsts := rows.map (·.expr.const)

@@ -385,43 +385,61 @@ def solveAtomic (g : MVarId) : TacticM Unit := do
     let atoms : AtomTable := { fvarToAtom := st.fvarToAtom, atomToFVar := st.atomToFVar }
     let some (rel, lhsExpr, rhsExpr, _, _) := parsed?
       | throwError "lp: goal is not an atomic comparison over {carrier}"
-    match rel with
-    | .le =>
-        try
-          let proof ← proveEntailed rows false st.vars lhsExpr rhsExpr atoms
+    let solve : TacticM Unit := do
+      match rel with
+      | .le =>
+          try
+            let proof ← proveEntailed rows false st.vars lhsExpr rhsExpr atoms
+            g.assign proof
+          catch e =>
+            -- Integer negated-goal strengthening (`ℤ`/`ℕ`): `lhs ≤ rhs ⟺ lhs < rhs + 1`. The
+            -- direct ℚ residual can land in `(-1, 0)` when the goal needs rounding a fractional
+            -- bound (`a ≤ b - 1/2 ⟹ a ≤ b` over `ℤ`); reproving the equivalent strict
+            -- `lhs < rhs + 1` adds the missing unit of slack through the strengthened
+            -- hypotheses, then `le_of_lt_add_one` recovers `lhs ≤ rhs`. (This is `linarith`'s
+            -- strict-negated-goal preprocessing.) On retry failure, surface the original error.
+            let kind ← detectCarrierKind carrier
+            unless kind == .int || kind == .nat do throw e
+            -- `rhs + 1` adds only a scalar constant — no new atoms — so the goal's variables
+            -- and atoms are already registered in `st.vars`/`atoms`, and `mkEntailEnv`'s
+            -- reparse (which discards its parse state) discovers nothing new.
+            let one ← mkAppOptM ``OfNat.ofNat #[some carrier, some (mkRawNatLit 1), none]
+            let rhsPlus ← mkAppM ``HAdd.hAdd #[rhsExpr, one]
+            let proof ← try
+                let ltProof ← proveEntailed rows true st.vars lhsExpr rhsPlus atoms
+                if kind == .int then mkAppM ``IntC.le_of_lt_add_one #[ltProof]
+                else mkAppM ``NatC.le_of_lt_add_one #[ltProof]
+              catch _ => throw e
+            g.assign proof
+      | .lt =>
+          let proof ← proveEntailed rows true st.vars lhsExpr rhsExpr atoms
           g.assign proof
-        catch e =>
-          -- Integer negated-goal strengthening (`ℤ`/`ℕ`): `lhs ≤ rhs ⟺ lhs < rhs + 1`. The
-          -- direct ℚ residual can land in `(-1, 0)` when the goal needs rounding a fractional
-          -- bound (`a ≤ b - 1/2 ⟹ a ≤ b` over `ℤ`); reproving the equivalent strict
-          -- `lhs < rhs + 1` adds the missing unit of slack through the strengthened
-          -- hypotheses, then `le_of_lt_add_one` recovers `lhs ≤ rhs`. (This is `linarith`'s
-          -- strict-negated-goal preprocessing.) On retry failure, surface the original error.
-          let kind ← detectCarrierKind carrier
-          unless kind == .int || kind == .nat do throw e
-          -- `rhs + 1` adds only a scalar constant — no new atoms — so the goal's variables
-          -- and atoms are already registered in `st.vars`/`atoms`, and `mkEntailEnv`'s
-          -- reparse (which discards its parse state) discovers nothing new.
-          let one ← mkAppOptM ``OfNat.ofNat #[some carrier, some (mkRawNatLit 1), none]
-          let rhsPlus ← mkAppM ``HAdd.hAdd #[rhsExpr, one]
-          let proof ← try
-              let ltProof ← proveEntailed rows true st.vars lhsExpr rhsPlus atoms
-              if kind == .int then mkAppM ``IntC.le_of_lt_add_one #[ltProof]
-              else mkAppM ``NatC.le_of_lt_add_one #[ltProof]
-            catch _ => throw e
+      | .eq =>
+          -- Both `≤` directions share one `EntailEnv` (goal parse, carrier ops,
+          -- nonneg-row augmentation); only the LP solve and assembly run per direction.
+          let env ← mkEntailEnv rows st.vars lhsExpr rhsExpr atoms
+          let h₁ ← proveEntailedCore env false
+          let h₂ ← proveEntailedCore env false (swap := true)
+          -- Carrier-native antisymmetry (e.g. `Field.le_antisymm` still *requires* a
+          -- `Field` instance `Int` lacks, so the dispatch matters).
+          let proof ← env.ops.leAntisymm h₁ h₂
           g.assign proof
-    | .lt =>
-        let proof ← proveEntailed rows true st.vars lhsExpr rhsExpr atoms
-        g.assign proof
-    | .eq =>
-        -- Both `≤` directions share one `EntailEnv` (goal parse, carrier ops,
-        -- nonneg-row augmentation); only the LP solve and assembly run per direction.
-        let env ← mkEntailEnv rows st.vars lhsExpr rhsExpr atoms
-        let h₁ ← proveEntailedCore env false
-        let h₂ ← proveEntailedCore env false (swap := true)
-        -- Carrier-native antisymmetry (e.g. `Field.le_antisymm` still *requires* a
-        -- `Field` instance `Int` lacks, so the dispatch matters).
-        let proof ← env.ops.leAntisymm h₁ h₂
-        g.assign proof
+    -- The parser atomizes truncating `Nat`-subtraction and `Int`/`Nat` floor-division/`%`
+    -- (an opaque atom carries no arithmetic) instead of rejecting the call. When the
+    -- residual linear problem closes, that is exactly the cheap sound move `linarith`
+    -- makes. When it does NOT close, the goal genuinely needs truncation semantics: surface
+    -- the `cutsat`/`omega` hint here, at the point of failure, rather than at parse time.
+    if st.truncatingAtoms then
+      try solve
+      catch e =>
+        -- Append the hint to whatever the solve failed with (the underlying error is kept
+        -- above). Worded so it does not assert a specific failure cause — the atom simply
+        -- carries no truncation arithmetic, so a goal that needs it cannot close this way.
+        throwError "{e.toMessageData}\n\nlp: this goal contains a truncating `Nat`-subtraction {
+          ""}or `Int`/`Nat` floor-division/`%`, which `lp` treated as an opaque atom (it {
+          ""}carries no truncation arithmetic). If the goal genuinely needs truncation {
+          ""}semantics, use `cutsat` (or `omega`)."
+    else
+      solve
 
 end LP.Tactic.LP.Internal
