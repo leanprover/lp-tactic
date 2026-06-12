@@ -204,6 +204,26 @@ theorem neg_congr_eq (a A : α) (e : a = A) : -a = -A := by subst e; rfl
 
 theorem sub_to_add_neg (a b : α) : a - b = a + (-b) := AddCommGroup.sub_eq_add_neg a b
 
+/-! ### Ring-normalization (distributivity / reassociation) lemmas.
+
+Mirror the `declare_lp_normalizer_ring_lemmas` block for the generic field carrier: the
+product preprocessing (`distributeMul?`) rewrites each `*` node to its distributed /
+reassociated form and the normalizer recurses on the result. -/
+
+theorem add_mul (a b c : α) : (a + b) * c = a * c + b * c := Semiring.right_distrib a b c
+
+theorem mul_add (a b c : α) : a * (b + c) = a * b + a * c := Semiring.left_distrib a b c
+
+theorem mul_reassoc (a b c : α) : (a * b) * c = a * (b * c) := Semiring.mul_assoc a b c
+
+theorem sub_mul (a b c : α) : (a - b) * c = a * c - b * c := by grind
+
+theorem mul_sub (a b c : α) : a * (b - c) = a * b - a * c := by grind
+
+theorem neg_mul (a c : α) : (-a) * c = -(a * c) := Ring.neg_mul a c
+
+theorem mul_neg (a c : α) : a * (-c) = -(a * c) := by grind
+
 end Ring
 
 end LP.Tactic.LP.Internal.Field
