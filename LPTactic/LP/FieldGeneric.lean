@@ -37,9 +37,6 @@ theorem sub_nonpos_of_lt {a b : α} (h : a < b) : a - b ≤ 0 := by grind
 
 theorem sub_neg_of_lt {a b : α} (h : a < b) : a - b < 0 := by grind
 theorem sub_nonpos_of_eq {a b : α} (h : a = b) : a - b ≤ 0 := by grind
-/-- Rewrite `a / c` as `c⁻¹ * a` so the normalizer reuses the scalar-mul path
-(true even at `c = 0`). Args explicit to match `applyLemma`. -/
-theorem div_eq_inv_mul (a b : α) : a / b = b⁻¹ * a := by grind
 theorem lt_of_sub_neg {a b : α} (h : a - b < 0) : a < b := by grind
 theorem le_of_nonneg_sub {a b : α} (h : 0 ≤ b - a) : a ≤ b := by grind
 theorem lt_of_pos_sub {a b : α} (h : 0 < b - a) : a < b := by grind
@@ -193,6 +190,11 @@ theorem add_congr_eq (a A b B : α) (ha : a = A) (hb : b = B) : a + b = A + B :=
 theorem mul_congr_eq_r (k a A : α) (e : a = A) : k * a = k * A := by subst e; rfl
 
 theorem mul_congr_eq_l (a A k : α) (e : a = A) : a * k = A * k := by subst e; rfl
+
+/-- Rewrite `a / c` as `c⁻¹ * a` so the normalizer reuses the scalar-mul path
+(true even at `c = 0`). Args explicit to match `applyLemma`. Carries only `[Field α]`
+so the fixed-arity applier's `{α} [Field α]` prefix matches the kernel signature. -/
+theorem div_eq_inv_mul (a b : α) : a / b = b⁻¹ * a := by grind
 
 /-- Divisor congruence: rewrite a compound closed divisor to its literal before the
 `div_eq_inv_mul` step. Args explicit to match `applyLemma`. -/
