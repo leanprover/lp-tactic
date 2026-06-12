@@ -227,7 +227,7 @@ the stored `Expr` (never `Expr.fvar` of a virtual). -/
 def atomVar (e : Expr) : ParseM (Option FVarId) := do
   unless (← get).allowAtoms do return none
   unless ← isDefEq (← inferType e) (← get).carrier do return none
-  let some a ← canonAtom e | return none
+  let some a ← canonAtom (← get).carrier e | return none
   if let some fv ← findDefEqAtom (← get).atomToFVar a then return some fv
   let fv ← mkFreshFVarId
   modify fun s => { s with
