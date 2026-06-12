@@ -49,6 +49,21 @@ theorem nat_add_le (a b c d : Nat) (h₁ : a ≤ b) (h₂ : c ≤ d) : a + c ≤
 
 theorem zero_self_le : (0 : Nat) ≤ 0 := by omega
 
+/-! ## Integer strengthening (the `linarith` strict-hypothesis preprocessing step). -/
+
+/-- A strict `a < b` over `ℕ` is the `+1`-slack non-strict `a + 1 ≤ b`. The parser uses
+this to relax strict hypothesis rows so a chain of `k` strict facts keeps all `k` units
+of slack instead of collapsing to a single strict ℚ-row. (`a < b` is *defeq* to
+`a + 1 ≤ b` over `ℕ`, but stating it with `+ 1` gives the certificate normalizer a
+genuine `HAdd` node to parse, not an opaque `Nat.succ` atom.) -/
+theorem add_one_le_of_lt {a b : Nat} (h : a < b) : a + 1 ≤ b := by omega
+
+/-- Integer negated-goal strengthening: over `ℕ` the non-strict `a ≤ b` is the strict
+`a < b + 1`. A non-strict `ℕ` goal whose direct ℚ residual lands in `(-1, 0)` (an
+integer-rounding gap) is reproved as the equivalent strict goal, then closed back to
+`a ≤ b` by this lemma. -/
+theorem le_of_lt_add_one {a b : Nat} (h : a < b + 1) : a ≤ b := by omega
+
 /-! ## Normalizer fixed-arity lemmas (semiring `+`/`*` only — NO neg/sub). -/
 
 declare_lp_normalizer_semiring_lemmas Nat

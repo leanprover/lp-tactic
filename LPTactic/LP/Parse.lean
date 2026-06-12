@@ -3,6 +3,7 @@ public meta import LPTactic.LP.Types
 public import LPTactic.LP.FieldGeneric
 public import LPTactic.LP.IntGeneric
 public import LPTactic.LP.DyadicGeneric
+public import LPTactic.LP.NatGeneric
 
 public meta section
 
@@ -397,6 +398,21 @@ def carrierSubNonposName (intName dyadicName fieldName : Name) : ParseM Name := 
   if ← isDefEq carrier (mkConst ``Dyadic) then return dyadicName
   return fieldName
 
+/-- The discrete integer carriers (`ℤ`, `ℕ`), on which a strict `a < b` is equivalent to
+the `+1`-slack non-strict `a + 1 ≤ b`. `Dyadic` and the field carriers are dense, so they
+keep the strict ℚ-row. Returns `some true` for `ℤ`, `some false` for `ℕ`, `none` otherwise. -/
+def intCarrierIsInt? : ParseM (Option Bool) := do
+  let carrier := (← get).carrier
+  if ← isDefEq carrier (mkConst ``Int) then return some true
+  if ← isDefEq carrier (mkConst ``Nat) then return some false
+  return none
+
+/-- Build `(e + 1)` over the goal's carrier (`@HAdd.hAdd α α α _ e 1`), the strengthened
+side of an integer strict fact. -/
+def addOne (e : Expr) : ParseM Expr := do
+  let one ← mkAppOptM ``OfNat.ofNat #[some (← get).carrier, some (mkRawNatLit 1), none]
+  mkAppM ``HAdd.hAdd #[e, one]
+
 partial def collectHypProof (origin : Name) (proof : Expr) :
     ParseM (Array Row) := do
   let type ← inferType proof
@@ -407,24 +423,53 @@ partial def collectHypProof (origin : Name) (proof : Expr) :
   match ← parseAtomic? type with
   | none => return #[]
   | some (.lt, lhsExpr, rhsExpr, lhs, rhs) =>
-      -- Strict hypothesis `a < b`. We keep BOTH the relaxed `a - b ≤ 0` (`proof`, used by
-      -- the LP and by combinations where non-strictness suffices) AND the strict `a - b < 0`
-      -- (`strictProof`), tagging the row `strict`. A positive multiplier on a strict row then
-      -- upgrades the Farkas sum from `≤ 0` to `< 0`, proving strict goals / strict
-      -- contradictions the relaxed combination cannot (ring carriers; the `Nat`
-      -- no-subtraction assembly ignores the tag and uses `leProof := Nat.le_of_lt`).
-      let row := lhs.sub rhs
-      let ltName ← carrierSubNonposName ``IntC.sub_nonpos_of_lt ``DyadicC.sub_nonpos_of_lt
-        ``Field.sub_nonpos_of_lt
-      let negName ← carrierSubNonposName ``IntC.sub_neg_of_lt ``DyadicC.sub_neg_of_lt
-        ``Field.sub_neg_of_lt
-      return #[{
-        term := mkAppM ``HSub.hSub #[lhsExpr, rhsExpr],
-        expr := row,
-        proof := mkAppM ltName #[proof],
-        lhsExpr := lhsExpr, rhsExpr := rhsExpr,
-        leProof := mkAppM ``Nat.le_of_lt #[proof],
-        strict := true, strictProof := mkAppM negName #[proof] }]
+      match ← intCarrierIsInt? with
+      | some isInt =>
+          -- Integer strengthening (`ℤ`/`ℕ`): a strict `a < b` is the `+1`-slack non-strict
+          -- `a + 1 ≤ b`, the preprocessing step `linarith` applies and `lp` was missing. We
+          -- emit a NON-strict row whose `term`/`expr` carry the `+1` (so a chain of `k`
+          -- strict facts keeps all `k` units of slack), discharged by `add_one_le_of_lt`.
+          -- Sound within ℚ-Farkas: it changes the rows, not the certificate theory.
+          let lhsPlus ← addOne lhsExpr
+          let row := let r := lhs.sub rhs; { r with const := r.const + 1 }
+          let leProof ←
+            if isInt then mkAppM ``IntC.add_one_le_of_lt #[proof]
+            else mkAppM ``NatC.add_one_le_of_lt #[proof]
+          -- `ℤ` uses the ring assembly (`term`/`proof`: the strengthened `(a+1) - b ≤ 0`);
+          -- `ℕ` uses the no-subtraction assembly (`lhsExpr`/`rhsExpr`/`leProof`: `a + 1 ≤ b`).
+          -- The ring fields stay dead on the `ℕ` path; we make them throwing thunks (as
+          -- `natNonnegRows` does) so a dispatch mistake fails loudly rather than building a
+          -- bogus `IntC.*` application over a `ℕ` proof.
+          if isInt then
+            return #[{
+              term := mkAppM ``HSub.hSub #[lhsPlus, rhsExpr],
+              expr := row,
+              proof := mkAppM ``IntC.sub_nonpos_of_le #[leProof],
+              lhsExpr := lhsPlus, rhsExpr := rhsExpr, leProof := pure leProof }]
+          else
+            return #[{
+              term := throwError "lp: ℕ strengthened strict row has no ring term (forced on non-ℕ path)"
+              expr := row,
+              proof := throwError "lp: ℕ strengthened strict row has no ring proof (forced on non-ℕ path)"
+              lhsExpr := lhsPlus, rhsExpr := rhsExpr, leProof := pure leProof }]
+      | none =>
+          -- Dense carriers (`Dyadic`/field/`Rat`): `a < b` does NOT imply `a + 1 ≤ b`, so we
+          -- keep BOTH the relaxed `a - b ≤ 0` (`proof`) AND the strict `a - b < 0`
+          -- (`strictProof`), tagging the row `strict`. A positive multiplier on a strict row
+          -- then upgrades the Farkas sum from `≤ 0` to `< 0`, proving strict goals / strict
+          -- contradictions the relaxed combination cannot.
+          let row := lhs.sub rhs
+          let ltName ← carrierSubNonposName ``IntC.sub_nonpos_of_lt ``DyadicC.sub_nonpos_of_lt
+            ``Field.sub_nonpos_of_lt
+          let negName ← carrierSubNonposName ``IntC.sub_neg_of_lt ``DyadicC.sub_neg_of_lt
+            ``Field.sub_neg_of_lt
+          return #[{
+            term := mkAppM ``HSub.hSub #[lhsExpr, rhsExpr],
+            expr := row,
+            proof := mkAppM ltName #[proof],
+            lhsExpr := lhsExpr, rhsExpr := rhsExpr,
+            leProof := mkAppM ``Nat.le_of_lt #[proof],
+            strict := true, strictProof := mkAppM negName #[proof] }]
   | some (.le, lhsExpr, rhsExpr, lhs, rhs) =>
       let row := lhs.sub rhs
       -- Row closure: `Int` needs native `IntC.*` lemmas (`Field.*` requires a `Field`
