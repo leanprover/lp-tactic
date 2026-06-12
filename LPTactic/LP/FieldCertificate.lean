@@ -33,6 +33,21 @@ structure CCtx where
   fieldInst : Expr
   charPInst : Expr
 
+/-- `(OfNat.ofNat n : α)` for a Grind field, with the SAME `OfNat α n` instance that
+`Field.NormNum.ofNat_eq` (and every generic field lemma's `(0 : α)`/`(1 : α)`) bakes in —
+the field's parent `Semiring.ofNat`. Read straight off `ofNat_eq`'s own LHS rather than
+synthesized: a bare `synthInstance (OfNat α n)` can outright fail for an abstract field
+reached through the Mathlib bridge (the reported `failed to synthesize OfNat K 0`), and
+even when it succeeds it may pick a DIFFERENT instance (e.g. `Zero.toOfNat0`) than the one
+the literal-faithfulness bridge (`proveLitEq`) proves about, breaking the spliced-numeral
+identity. Taking the literal from the lemma makes the two identical by construction. -/
+def mkFieldOfNatLit (α fieldInst : Expr) (u : Level) (n : Nat) : MetaM Expr := do
+  let lemmaTy ← inferType <|
+    mkApp3 (mkConst ``Lean.Grind.Field.NormNum.ofNat_eq [u]) α fieldInst (mkRawNatLit n)
+  let some (_, lhs, _) := lemmaTy.eq?
+    | throwError "lp(field): could not read the `OfNat α {n}` literal off `ofNat_eq`"
+  return lhs
+
 def mkCCtx (α : Expr) : MetaM CCtx := do
   let u := (← getLevel α).dec.getD Level.zero
   let hAddInst ← synthInstance (← mkAppM ``HAdd #[α, α, α])
@@ -47,12 +62,8 @@ def mkCCtx (α : Expr) : MetaM CCtx := do
   let divFn := mkApp4 (mkConst ``HDiv.hDiv [u, u, u]) α α α hDivInst
   let negFn := mkApp2 (mkConst ``Neg.neg [u]) α negInst
   let ofRatFn := mkApp2 (mkConst ``Lean.Grind.Field.NormNum.ofRat [u]) α fieldInst
-  let zeroIdx := mkRawNatLit 0
-  let oneIdx  := mkRawNatLit 1
-  let zeroInst ← synthInstance (mkApp2 (mkConst ``OfNat [u]) α zeroIdx)
-  let oneInst  ← synthInstance (mkApp2 (mkConst ``OfNat [u]) α oneIdx)
-  let zero := mkApp3 (mkConst ``OfNat.ofNat [u]) α zeroIdx zeroInst
-  let one  := mkApp3 (mkConst ``OfNat.ofNat [u]) α oneIdx oneInst
+  let zero ← mkFieldOfNatLit α fieldInst u 0
+  let one  ← mkFieldOfNatLit α fieldInst u 1
   let charPInst ← synthInstance (← mkAppM ``IsCharP #[α, toExpr (0 : Nat)])
   return { α, u, addFn, mulFn, subFn, divFn, negFn, ofRatFn, zero, one, fieldInst, charPInst }
 
@@ -64,11 +75,10 @@ def mkCCtx (α : Expr) : MetaM CCtx := do
 /-- `ofRat r : α` — a rational coefficient/constant literal. -/
 @[inline] def CCtx.mkLit (c : CCtx) (r : Rat) : Expr := mkApp c.ofRatFn (toExpr r)
 
-/-- `(OfNat.ofNat n : α)` — a carrier `Nat` numeral. -/
-def CCtx.mkOfNatLit (c : CCtx) (n : Nat) : MetaM Expr := do
-  let idx := mkRawNatLit n
-  let inst ← synthInstance (mkApp2 (mkConst ``OfNat [c.u]) c.α idx)
-  return mkApp3 (mkConst ``OfNat.ofNat [c.u]) c.α idx inst
+/-- `(OfNat.ofNat n : α)` — a carrier `Nat` numeral, using the field-parent `OfNat`
+instance the certificate lemmas expect (see `mkFieldOfNatLit`). -/
+def CCtx.mkOfNatLit (c : CCtx) (n : Nat) : MetaM Expr :=
+  mkFieldOfNatLit c.α c.fieldInst c.u n
 
 /-- `(m : α)` as a structural numeral: `OfNat` for `m ≥ 0`, `Neg (OfNat …)` else. -/
 def CCtx.mkIntNumeral (c : CCtx) (m : Int) : MetaM Expr := do
