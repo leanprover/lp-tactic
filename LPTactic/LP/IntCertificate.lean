@@ -30,7 +30,9 @@ partial def intScalarLit? (e : Expr) : MetaM (Option Rat) := do
     return (← parseNatLit? e.appArg!).map (fun k => ((Int.ofNat k : Int) : Rat))
   if e.isAppOfArity ``Int.negSucc 1 then
     return (← parseNatLit? e.appArg!).map (fun k => ((Int.negSucc k : Int) : Rat))
-  quickScalarLit? e
+  -- `Int` `/` is floor division: a closed `5 / 2` is NOT the scalar `2.5` (the parser
+  -- atomizes it), so the scalar recognizer must not fold `/`/`⁻¹` either.
+  quickScalarLit? e (allowDiv := false)
 
 /-- The `Int` `RingCtx`: integer multipliers only (the residual must clear to an
 integer; a fractional one means the certificate is not expressible over `Int`). -/
@@ -38,5 +40,7 @@ def mkICtx : MetaM RingCtx :=
   mkRingCtx ``Int `LP.Tactic.LP.Internal.IntC "int" (fun r => mkIntNum r.num) intScalarLit?
     (fun cV => do
       unless cV.den == 1 do throwError "lp(int): cleared residual {cV} not integral")
+    -- `Int` `/` is floor division, not the rational quotient: atomize, never linearize.
+    (allowDiv := false)
 
 end LP.Tactic.LP.Internal.IntC

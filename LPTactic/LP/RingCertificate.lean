@@ -36,7 +36,8 @@ operator instances once, and wire the monomorphic lemma namespace `ns` (the
 `declare_lp_ordered_ring_lemmas` block) into `applyLemma`. Leaf coefficient proofs are
 bare `Eq.refl`s — the carrier's literals are kernel-reducible. -/
 def mkRingCtx (αName : Name) (ns : Name) (tag : String) (mkLit : Rat → Expr)
-    (scalarLit? : Expr → MetaM (Option Rat)) (checkResidual : Rat → MetaM Unit) :
+    (scalarLit? : Expr → MetaM (Option Rat)) (checkResidual : Rat → MetaM Unit)
+    (allowDiv : Bool := true) :
     MetaM RingCtx := do
   let α := mkConst αName
   let u := Level.zero
@@ -60,7 +61,10 @@ def mkRingCtx (αName : Name) (ns : Name) (tag : String) (mkLit : Rat → Expr)
     proveLitEq := fun e _r => pure (refl e)
     applyLemma := fun name args => mkAppN (mkConst (ns.append name)) args
     mkEqTrans := fun aE bE cE p q =>
-      mkApp6 (mkConst ``Eq.trans [Level.succ u]) α aE bE cE p q }
+      mkApp6 (mkConst ``Eq.trans [Level.succ u]) α aE bE cE p q
+    -- `Int` floor-divides (`allowDiv := false` ⇒ `a / b` atomized); `Dyadic` has no `Div`,
+    -- so the flag is moot there. Both subtract exactly (`allowSub` stays the default).
+    allowDiv }
   return { m, leFn, ltFn, tag, checkResidual }
 
 @[inline] def RingCtx.mkLe (c : RingCtx) (a b : Expr) : Expr := mkApp2 c.leFn a b
