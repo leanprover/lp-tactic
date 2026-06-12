@@ -10,6 +10,7 @@ import LPTacticTest.Issue27
 import LPTacticTest.Issue34
 import LPTacticTest.Issue35
 import LPTacticTest.Issue38
+import LPTacticTest.Issue40
 import LPTacticTest.Issue42
 
 def main : IO UInt32 :=
