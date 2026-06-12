@@ -507,7 +507,18 @@ def collectHyps : ParseM (Array Row) := do
   for decl in (← getLCtx) do
     unless decl.isImplementationDetail do
       if ← isProp decl.type then
-        rows := rows ++ (← collectHypProof decl.userName decl.toExpr)
+        -- Fail-open: a hypothesis whose shape lies OUTSIDE the supported fragment
+        -- (truncating `Nat` subtraction, `Int`/`Nat` floor division, division by a
+        -- non-constant, …) makes its per-hypothesis parse THROW. Per the documented
+        -- contract, hypotheses outside the fragment are silently ignored — never fatal.
+        -- So catch the parse error and drop the offending hypothesis, restoring the
+        -- parse state first so its partial variable/atom registrations don't leak into
+        -- the LP. Throws are reserved for the goal side (parsed by its own caller).
+        let saved ← get
+        try
+          rows := rows ++ (← collectHypProof decl.userName decl.toExpr)
+        catch _ =>
+          set saved
   return rows
 
 end LP.Tactic.LP.Internal
