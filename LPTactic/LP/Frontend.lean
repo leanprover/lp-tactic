@@ -21,7 +21,9 @@ partial def hypCarrier? (ty : Expr) : MetaM (Option Expr) := do
     match ← hypCarrier? l with
     | some α => return some α
     | none => return ← hypCarrier? r
-  match relCarrier? ty with
+  -- Look through a negated comparison (`¬ (a ≤ b)`, `a ≠ b`, …) to the carrier underneath.
+  let rel := (← notInner? ty).getD ty
+  match relCarrier? rel with
   | some α => if ← isCarrierType α then return some α else return none
   | none => return none
 
@@ -31,7 +33,9 @@ the carrier a `False`/`≠` goal's contradiction lives over. -/
 partial def hypCarriers (ty : Expr) : MetaM (Array Expr) := do
   if let some (l, r) := isAnd? ty then
     return (← hypCarriers l) ++ (← hypCarriers r)
-  match relCarrier? ty with
+  -- Look through a negated comparison (`¬ (a ≤ b)`, `a ≠ b`, …) to the carrier underneath.
+  let rel := (← notInner? ty).getD ty
+  match relCarrier? rel with
   | some α => if ← isCarrierType α then return #[α] else return #[]
   | none => return #[]
 
