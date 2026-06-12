@@ -73,14 +73,29 @@ def render (m : CarrierMethods) (L : LinExpr) : Expr := Id.run do
   return acc
 
 /-- Normalize an opaque atom subterm `e`: look up the virtual LP variable the parser
-assigned it and emit `e = 1*v + 0` via `atom_norm`. Errors cleanly if `e` was not atomized. -/
+assigned it and emit `e = 1*v + 0` via `atom_norm`. Errors cleanly if `e` was not atomized.
+
+When `e` is a commuted carrier product (`y * f x` against a stored key `f x * y`), the
+stored representative is no longer defeq to `e`, so `atom_norm #[e]` alone would not match
+`render`'s `1 * key + 0`. We then prove `e = key` by the sound `mul_comm`/`mul_assoc`
+reordering (`mulCanon?`) and chain it with `atom_norm #[key]`. The common, non-reordered
+case keeps the original `atom_norm #[e]` fast path (the key is defeq to `e`). -/
 def normalizeAtom (m : CarrierMethods) (e : Expr) : MetaM (LinExpr × Expr × Expr) := do
-  let some a ← canonAtom e
+  let some a ← canonAtom m.α e
     | throwError "lp: unsupported expression{indentExpr e}"
   let some v ← findDefEqAtom m.atoms.atomToFVar a
     | throwError "lp: atom not registered during parsing{indentExpr e}"
+  let key := m.atoms.keyToExpr v
   let L : LinExpr := {coeffs := #[(v, 1)]}
-  return (L, m.applyLemma `atom_norm #[e], m.render L)
+  let rL := m.render L
+  match ← mulCanon? m.α (← instantiateMVars e.consumeMData) with
+  | none => return (L, m.applyLemma `atom_norm #[e], rL)
+  | some (_, p) =>
+      -- `p : e = canon`; `canon` and the stored `key` are the same canonical multiset,
+      -- hence defeq. Coerce `p`'s endpoint to `key` (so `render`'s representative stays
+      -- consistent across occurrences), then chain `key = 1 * key + 0`.
+      let pKey ← mkExpectedTypeHint p (← mkEq e key)
+      return (L, ← Lean.Meta.mkEqTrans pKey (m.applyLemma `atom_norm #[key]), rL)
 
 /-- Precompute heads `cₖ*xₖ`, coefficient Exprs, and shared suffix renderings. -/
 def precomputeSpine (m : CarrierMethods) (L : LinExpr) :
@@ -378,7 +393,17 @@ partial def normalizeScalar? (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
     -- recursing, so a reducibly-wrapped compound scalar (a `@[reducible]` abbrev, a
     -- `let` expression) is accepted identically; transport back to `e` by defeq.
     let eU ← withReducible <| whnfR e
-    let (L, pf, rL) ← m.normalizeR vidx eU
+    -- Distinct fallback indices for any free var in `eU`. Without this the trial
+    -- normalizer can be fooled into reporting *empty* coefficients: every atom outside
+    -- the invocation's variable order shares the `varIdx vidx · = vidx.size` fallback,
+    -- so distinct unregistered fvars collide and `proveMerge` wrongly cancels them —
+    -- e.g. `b - a` over free `a b` reduces to `0`, mis-modelling a non-scalar product
+    -- factor as the scalar `0` (and emitting an ill-typed proof). Giving each its own
+    -- index keeps `b - a` as `b + (-1)·a` (non-empty), so it correctly atomizes.
+    -- Genuine compound scalars (`(2 - 1)`) carry no free vars and are unaffected.
+    let trialVidx := (collectFVars {} eU).fvarIds.foldl
+      (fun vi fv => if vi.contains fv then vi else vi.insert fv vi.size) vidx
+    let (L, pf, rL) ← m.normalizeR trialVidx eU
     if L.coeffs.isEmpty then
       let pf ← if eU == e then pure pf else mkExpectedTypeHint pf (← mkEq e rL)
       return some (L.const, pf)

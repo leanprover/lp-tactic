@@ -282,14 +282,168 @@ fvar, else the real local `Expr.fvar`. -/
 def AtomTable.keyToExpr (t : AtomTable) (v : FVarId) : Expr :=
   t.fvarToAtom.getD v (Expr.fvar v)
 
+/-! ### Commutative-product atom canonicalization
+
+Opaque non-affine subterms are atomized and keyed by their `Expr`. Ring-equal but not
+defeq forms — `f x * y` vs `y * f x` — would otherwise get *separate* LP columns, so the
+hypothesis row never constrains the goal column and the refutation LP is unbounded.
+
+We canonicalize a product atom by flattening its carrier-`*` chain and sorting the
+resulting factors by `Expr.lt` (a total order). Both commuted forms then share one
+canonical key, hence one column. The reordering is sound under the carrier's
+`CommSemiring` (every carrier the normalizer runs on synthesizes one — the certificate
+already uses `Lean.Grind.CommSemiring.mul_comm`), and the certificate proves
+`original = canonical` from `mul_assoc`/`mul_comm` (`mulCanon?` below). Only
+top-level carrier products are reordered (factors stay opaque); `^` and products buried
+inside a factor are left as-is. -/
+
+/-- Extract the partially-applied carrier multiplication head `@HMul.hMul α α α inst`
+from a *homogeneous* product `e = a * b` over `carrier` (all three `HMul` type arguments
+defeq `carrier`), or `none` otherwise. Reusing `e`'s own head keeps the `HMul` instance
+identical to the source term; the homogeneity check rejects heterogeneous `•`-style muls. -/
+def carrierMulHead? (carrier : Expr) (e : Expr) : MetaM (Option Expr) := do
+  let fn := e.getAppFn
+  let args := e.getAppArgs
+  unless fn.isConstOf ``HMul.hMul && args.size == 6 do return none
+  unless (← isDefEq args[0]! carrier) && (← isDefEq args[1]! carrier)
+      && (← isDefEq args[2]! carrier) do return none
+  return some e.appFn!.appFn!
+
+/-- View `e` as `mulHead a b` (a product with *exactly* this head, hence the same `HMul`
+instance), returning its two operands. A child product built with a different instance is
+not matched, so it stays an opaque factor rather than being flattened with the wrong head. -/
+def asMulHeadApp? (mulHead e : Expr) : Option (Expr × Expr) :=
+  if e.isApp && e.appFn!.isApp && e.appFn!.appFn!.equal mulHead then
+    some (e.appFn!.appArg!, e.appArg!)
+  else none
+
+/-- Build the right-nested product `f₀ * (f₁ * (… * fₙ₋₁))` from a nonempty factor
+array, using `mulHead` (the carrier's `HMul` head). -/
+def buildRightNested (mulHead : Expr) (fs : Array Expr) : Expr := Id.run do
+  let mut acc := fs[fs.size - 1]!
+  for i in [1:fs.size] do
+    acc := mkApp2 mulHead fs[fs.size - 1 - i]! acc
+  return acc
+
+/-- Flatten a product into its factor list, recursively splitting `*` nodes that share
+`mulHead` and preserving left-to-right order. Subterms that are not `mulHead` products
+(including products under a different instance) are leaves. -/
+partial def flattenMul (mulHead : Expr) (e : Expr) (out : Array Expr) : Array Expr :=
+  match asMulHeadApp? mulHead e with
+  | none => out.push e
+  | some (a, b) => flattenMul mulHead b (flattenMul mulHead a out)
+
+/-- Insert `x` into the sorted (by `Expr.lt`) nonempty factor array `s`. Mirrors the
+branching of `proveInsert` so the key path and the proof path agree on the result. -/
+partial def insertSorted (x : Expr) (s : Array Expr) : Array Expr :=
+  if Expr.lt s[0]! x then
+    if s.size == 1 then #[s[0]!, x]
+    else #[s[0]!] ++ insertSorted x (s.extract 1 s.size)
+  else #[x] ++ s
+
+/-- Insertion-sort a nonempty factor array by `Expr.lt`. -/
+partial def sortFactors (fs : Array Expr) : Array Expr :=
+  if fs.size ≤ 1 then fs
+  else insertSorted fs[0]! (sortFactors (fs.extract 1 fs.size))
+
+/-- `a * (b * c) = b * (a * c)` over the carrier, from `mul_comm` + `mul_assoc`. -/
+def mkMulLeftComm (mulHead a b c : Expr) : MetaM Expr := do
+  let e1 ← mkEqSymm (← mkAppM ``Lean.Grind.Semiring.mul_assoc #[a, b, c])
+  let comm ← mkAppM ``Lean.Grind.CommSemiring.mul_comm #[a, b]
+  let e2 ← mkCongrFun (← mkCongrArg mulHead comm) c
+  let e3 ← mkAppM ``Lean.Grind.Semiring.mul_assoc #[b, a, c]
+  mkEqTrans e1 (← mkEqTrans e2 e3)
+
+/-- Prove `RN(fa) * RN(fb) = RN(fa ++ fb)` by re-associating, where `RN` is
+`buildRightNested mulHead`. Both arrays nonempty. -/
+partial def proveAppendRN (mulHead : Expr) (fa fb : Array Expr) : MetaM Expr := do
+  if fa.size == 1 then
+    return ← mkEqRefl (mkApp2 mulHead fa[0]! (buildRightNested mulHead fb))
+  let x := fa[0]!
+  let rest := fa.extract 1 fa.size
+  let assoc ← mkAppM ``Lean.Grind.Semiring.mul_assoc
+    #[x, buildRightNested mulHead rest, buildRightNested mulHead fb]
+  let congr ← mkCongrArg (mkApp mulHead x) (← proveAppendRN mulHead rest fb)
+  mkEqTrans assoc congr
+
+/-- Reassociate a carrier product `e` to right-nested form over its flattened factors,
+returning `(flatFactors, pf : e = RN flatFactors)`. -/
+partial def proveReassoc (mulHead : Expr) (e : Expr) :
+    MetaM (Array Expr × Expr) := do
+  match asMulHeadApp? mulHead e with
+  | none => return (#[e], ← mkEqRefl e)
+  | some (a, b) =>
+      let (fa, pa) ← proveReassoc mulHead a
+      let (fb, pb) ← proveReassoc mulHead b
+      let congrAB ← mkCongr (← mkCongrArg mulHead pa) pb
+      let app ← proveAppendRN mulHead fa fb
+      return (fa ++ fb, ← mkEqTrans congrAB app)
+
+/-- Insert `x` into the sorted nonempty product `s` (= `RN s`), returning
+`(s', pf : x * RN(s) = RN(s'))`. Mirrors `insertSorted`. -/
+partial def proveInsert (mulHead : Expr) (x : Expr) (s : Array Expr) :
+    MetaM (Array Expr × Expr) := do
+  let s0 := s[0]!
+  if Expr.lt s0 x then
+    if s.size == 1 then
+      return (#[s0, x], ← mkAppM ``Lean.Grind.CommSemiring.mul_comm #[x, s0])
+    let rest := s.extract 1 s.size
+    let lcomm ← mkMulLeftComm mulHead x s0 (buildRightNested mulHead rest)
+    let (ins, pIns) ← proveInsert mulHead x rest
+    let congr ← mkCongrArg (mkApp mulHead s0) pIns
+    return (#[s0] ++ ins, ← mkEqTrans lcomm congr)
+  else
+    return (#[x] ++ s, ← mkEqRefl (mkApp2 mulHead x (buildRightNested mulHead s)))
+
+/-- Sort a nonempty flattened factor array, returning `(sorted, pf : RN(flat) = RN(sorted))`.
+Insertion sort, mirroring `sortFactors`. -/
+partial def proveSort (mulHead : Expr) (flat : Array Expr) :
+    MetaM (Array Expr × Expr) := do
+  if flat.size == 1 then
+    return (flat, ← mkEqRefl flat[0]!)
+  let x := flat[0]!
+  let (sortedRest, pRest) ← proveSort mulHead (flat.extract 1 flat.size)
+  let congr ← mkCongrArg (mkApp mulHead x) pRest
+  let (sorted, pIns) ← proveInsert mulHead x sortedRest
+  return (sorted, ← mkEqTrans congr pIns)
+
+/-- The canonical sorted-factor key for a carrier product `e`, or `none` when `e` is not a
+carrier product, has a single factor, or is already canonical. Pure (no proof), used to
+key the atom table; the proof-producing `mulCanon?` returns the same canonical `Expr`. -/
+def mulCanonKey? (carrier : Expr) (e : Expr) : MetaM (Option Expr) := do
+  let some mulHead ← carrierMulHead? carrier e | return none
+  let flat := flattenMul mulHead e #[]
+  if flat.size < 2 then return none
+  let canon := buildRightNested mulHead (sortFactors flat)
+  if canon.equal e then return none else return some canon
+
+/-- Canonicalize a carrier product by flattening and sorting its factors, returning the
+canonical product and a proof `e = canon`. `none` when `e` is not a reorderable product or
+is already canonical. The returned `canon` equals `mulCanonKey?`'s key. -/
+def mulCanon? (carrier : Expr) (e : Expr) : MetaM (Option (Expr × Expr)) := do
+  let some mulHead ← carrierMulHead? carrier e | return none
+  let flat := flattenMul mulHead e #[]
+  if flat.size < 2 then return none
+  let canon := buildRightNested mulHead (sortFactors flat)
+  if canon.equal e then return none
+  -- Only build the reordering proof once we know reordering is needed.
+  let (flat', pReassoc) ← proveReassoc mulHead e
+  let (sorted, pSort) ← proveSort mulHead flat'
+  -- The proof path must rebuild *exactly* the key path's canonical form, or the parser
+  -- and certificate would key the atom on different columns. Guard the invariant.
+  unless (buildRightNested mulHead sorted).equal canon do
+    throwError "lp: internal canonicalization mismatch{indentExpr e}"
+  return some (canon, ← mkEqTrans pReassoc pSort)
+
 /-- Canonicalize an atom `Expr` into a stable LP-variable key: strip metadata and
 instantiate assigned mvars; reject terms with unassigned/level mvars or loose bvars
-(unstable or out of context). Used identically by the parser and the certificate
-normalizer so their atom keys agree. -/
-def canonAtom (e : Expr) : MetaM (Option Expr) := do
+(unstable or out of context); and canonicalize commuted carrier products
+(`mulCanonKey?`) so ring-equal products share one key. Used identically by the parser and
+the certificate normalizer so their atom keys agree. -/
+def canonAtom (carrier : Expr) (e : Expr) : MetaM (Option Expr) := do
   let e ← instantiateMVars e.consumeMData
   if e.hasExprMVar || e.hasLevelMVar || e.hasLooseBVars then return none
-  return some e
+  return some ((← mulCanonKey? carrier e).getD e)
 
 /-- Look up the LP variable for a canonical atom `a`: first the exact (syntactic) key, then,
 on a miss, an `isDefEq` scan over the registered atoms. The scan lets atoms that are equal up
