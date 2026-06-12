@@ -240,6 +240,21 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
     MetaM (LinExpr × Expr × Expr) := do
   if let some r ← m.scalarLit? e then
     return ({const := r}, ← m.proveLitEq e r, m.mkLit r)
+  -- Mirror the parser's per-node `whnfR` (`parseInto` reduces every subterm at reducible
+  -- transparency before deciding to descend or atomize). Without this the two walks diverge
+  -- on a reducibly-reducing head — e.g. `↑⟨b + 1, h⟩` (a `Fin.val` projection of an
+  -- anonymous-constructor literal) reduces to `b + 1` for the parser but stays an opaque
+  -- projection for the normalizer, which then atomizes a term the parser never registered
+  -- ("atom not registered during parsing"). Reduce first, recurse on the reduced form, and
+  -- transport the proof back to the original `e` by defeq (the reduction is reducible, hence
+  -- definitional). When `whnfR` is a no-op the match arms below run on `e` unchanged.
+  -- When the reduced form is itself atomized, `normalizeAtom` looks up `eR` while the parser
+  -- registered its pre-`whnf` original; `findDefEqAtom`'s defeq scan bridges the two (they are
+  -- reducibly defeq), so the column still resolves.
+  let eR ← withReducible <| whnfR e
+  if eR != e then
+    let (L, pf, rL) ← m.normalizeR vidx eR
+    return (L, ← mkExpectedTypeHint pf (← mkEq e rL), rL)
   match e with
   | .fvar id =>
       let L : LinExpr := {coeffs := #[(id, 1)]}
