@@ -83,18 +83,24 @@ partial def solveGoal (g : MVarId) : TacticM Unit := do
       -- back to certifying the hypotheses inconsistent. Decide on the RAW goal
       -- type (the `whnfR` `target` may have unfolded a `Rat` `≤` to a `Bool` `=`).
       let rawGoal ← instantiateMVars (← g.getType)
-      match relCarrier? rawGoal with
-      | some _ => solveAtomic g
-      | none =>
-          -- A negation / `≠` goal `¬P` (`Ne`/`Not` need default-transparency `whnf` to expose
-          -- the `P → False` arrow that reducible `intros` left intact): introduce `P` as a
-          -- hypothesis and prove `False`, so the strict-aware inconsistency check can use it.
-          let ty ← whnf rawGoal
-          if ty.isArrow && ty.bindingBody!.isConstOf ``False then
-            let (_, g') ← g.intro1
-            solveGoal g'
-          else
-            solveInconsistent g rawGoal
+      -- Treat the goal as an atom only when its relation type ACTUALLY carries the
+      -- arithmetic structure: a comparison/`Eq` whose carrier is a non-arithmetic type
+      -- (e.g. `x = y` for `x y : X` a topological space) is not an `lp` atom — committing
+      -- to `X` would later throw a raw `failed to synthesize HAdd X X X` from carrier
+      -- detection. Such a goal is instead discharged (ex falso) from inconsistent
+      -- arithmetic hypotheses, exactly like `False`.
+      if let some α := relCarrier? rawGoal then
+        if ← isCarrierType α then
+          return ← solveAtomic g
+      -- A negation / `≠` goal `¬P` (`Ne`/`Not` need default-transparency `whnf` to expose
+      -- the `P → False` arrow that reducible `intros` left intact): introduce `P` as a
+      -- hypothesis and prove `False`, so the strict-aware inconsistency check can use it.
+      let ty ← whnf rawGoal
+      if ty.isArrow && ty.bindingBody!.isConstOf ``False then
+        let (_, g') ← g.intro1
+        solveGoal g'
+      else
+        solveInconsistent g rawGoal
 
 /-- The `lp` tactic. Optional `(backend := <name>)` argument pins a
     specific backend by name for this call only, overriding any
