@@ -170,7 +170,22 @@ partial def solveGoal (g : MVarId) : TacticM Unit := do
       -- arithmetic hypotheses, exactly like `False`.
       if let some α := relCarrier? rawGoal then
         if ← isCarrierType α then
-          return ← solveAtomic g
+          -- Does the goal parse as an atomic comparison? A goal that PARSES but fails to
+          -- SOLVE may still hold ex falso from inconsistent hypotheses (e.g. a `D u = 0`
+          -- goal under a `1 < 0` hypothesis), so we fall back to the inconsistency path.
+          -- But a goal that fails to PARSE (e.g. `x / 0`) is a genuine blocker and must
+          -- throw its precise error — no fallback (see Issue45).
+          let goalParses ← (do
+              let (p, _) ← (parseAtomic? rawGoal).run { carrier := α, allowAtoms := true }
+              pure p.isSome) <|> pure false
+          if goalParses then
+            try
+              return ← solveAtomic g
+            catch eAtomic =>
+              try return ← solveInconsistent g rawGoal
+              catch _ => throw eAtomic
+          else
+            return ← solveAtomic g
       -- A negation / `≠` goal `¬P` (`Ne`/`Not` need default-transparency `whnf` to expose
       -- the `P → False` arrow that reducible `intros` left intact): introduce `P` as a
       -- hypothesis and prove `False`, so the strict-aware inconsistency check can use it.

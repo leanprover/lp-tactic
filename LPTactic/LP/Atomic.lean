@@ -361,6 +361,10 @@ def proveEntailed (rows : Array Row) (strict : Bool)
 /-- The carrier type `α` of an atomic comparison goal `lhs op rhs` — the first
 explicit type argument of `LE`/`LT`/`GE`/`GT`/`Eq`. -/
 def relCarrier? (type : Expr) : Option Expr :=
+  -- The raw goal type may be `Expr.mdata`-wrapped (Lean attaches metadata to many
+  -- elaborated goals); strip it so the comparison head is visible. `linarith` is
+  -- likewise mdata-robust. Without this the goal misroutes to the inconsistency path.
+  let type := type.consumeMData
   let args := type.getAppArgs
   match type.getAppFn with
   | .const ``LE.le _ | .const ``GE.ge _
