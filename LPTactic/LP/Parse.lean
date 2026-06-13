@@ -1,5 +1,6 @@
 module
 public meta import LPTactic.LP.Types
+public import LPTactic.LP.CastLift
 public import LPTactic.LP.FieldGeneric
 public import LPTactic.LP.IntGeneric
 public import LPTactic.LP.DyadicGeneric
@@ -491,45 +492,64 @@ def addOne (e : Expr) : ParseM Expr := do
   let one ← mkAppOptM ``OfNat.ofNat #[some (← get).carrier, some (mkRawNatLit 1), none]
   mkAppM ``HAdd.hAdd #[e, one]
 
-/-- Recognise `type` as a `ℕ` comparison `a ≤ b` / `a < b` / `a = b` (descending through
-`≥`/`>` by flipping), returning `(rel, a, b)` with `a b : ℕ`. Used by the `zify` lift to
-spot a `ℕ` hypothesis sitting under a ring-carrier goal. -/
-def natComparison? (type : Expr) : MetaM (Option (Rel × Expr × Expr)) := do
-  let nat := mkConst ``Nat
+/-- Recognise `type` as a comparison `a ≤ b` / `a < b` / `a = b` over the source carrier
+`src` (descending through `≥`/`>` by flipping), returning `(rel, a, b)` with `a b : src`.
+Used by the `zify` lift to spot a `ℕ`/`ℤ` hypothesis sitting under a higher ring-carrier
+goal. -/
+def comparisonOver? (src type : Expr) : MetaM (Option (Rel × Expr × Expr)) := do
   let args := type.getAppArgs
   match type.getAppFn with
-  | .const ``LE.le _ => if args.size == 4 && (← isDefEq args[0]! nat) then return some (.le, args[2]!, args[3]!)
-  | .const ``GE.ge _ => if args.size == 4 && (← isDefEq args[0]! nat) then return some (.le, args[3]!, args[2]!)
-  | .const ``LT.lt _ => if args.size == 4 && (← isDefEq args[0]! nat) then return some (.lt, args[2]!, args[3]!)
-  | .const ``GT.gt _ => if args.size == 4 && (← isDefEq args[0]! nat) then return some (.lt, args[3]!, args[2]!)
-  | .const ``Eq _ => if args.size == 3 && (← isDefEq args[0]! nat) then return some (.eq, args[1]!, args[2]!)
+  | .const ``LE.le _ => if args.size == 4 && (← isDefEq args[0]! src) then return some (.le, args[2]!, args[3]!)
+  | .const ``GE.ge _ => if args.size == 4 && (← isDefEq args[0]! src) then return some (.le, args[3]!, args[2]!)
+  | .const ``LT.lt _ => if args.size == 4 && (← isDefEq args[0]! src) then return some (.lt, args[2]!, args[3]!)
+  | .const ``GT.gt _ => if args.size == 4 && (← isDefEq args[0]! src) then return some (.lt, args[3]!, args[2]!)
+  | .const ``Eq _ => if args.size == 3 && (← isDefEq args[0]! src) then return some (.eq, args[1]!, args[2]!)
   | _ => pure ()
   return none
 
-/-- `zify` for a `ℕ` hypothesis under a ring-carrier goal: lift `a ≤ b` / `a < b` / `a = b`
-over `ℕ` to the goal carrier `R` via the monotone cast (`linarith`'s `zify`/`push_cast`
-preprocessing), returning a proof of `↑a (rel) ↑b : R` so the hypothesis constrains the
-goal's `↑(·)` columns. Returns `none` when the goal carrier is `ℕ` itself (no lift) or the
-hypothesis is not a `ℕ` comparison; throws (caught upstream by `collectHyps`' fail-open
-wrapper, or here by the local `try`) when `R` lacks the ordered-ring cast structure, so a
-carrier without the monotone cast simply drops the hypothesis rather than failing the call. -/
-def zifyNatHyp? (proof type : Expr) : ParseM (Option Expr) := do
+/-- `zify` for a `ℕ` or `ℤ` hypothesis under a strictly-higher ring-carrier goal: lift
+`a ≤ b` / `a < b` / `a = b` over the source carrier to the goal carrier `R` via the
+monotone cast (`linarith`'s `zify`/`push_cast` preprocessing), returning a proof of
+`↑a (rel) ↑b : R` so the hypothesis constrains the goal's `↑(·)` columns. Dispatches on the
+source carrier: `ℕ` via the core `OrderedRing.natCast_*` lemmas (and `Nat.cast` congruence
+for `=`), `ℤ` via the `intCast_*` helpers (`LP/CastLift.lean`). Returns `none` when the
+hypothesis is not a `ℕ`/`ℤ` comparison, or its source carrier already equals the goal
+carrier (no lift). Throws (caught here by the local `try`, or upstream by `collectHyps`'
+fail-open wrapper) when `R` lacks the source's monotone cast structure — so e.g. an `ℤ`
+hypothesis under a `ℕ` goal drops (no `Ring` negation, hence no possibly-negative `ℤ`
+sneaking into `ℕ`) rather than failing the call. -/
+def zifyHyp? (proof type : Expr) : ParseM (Option Expr) := do
   let R := (← get).carrier
-  -- A `ℕ`-carrier goal keeps `ℕ` hypotheses on the fast path; only lift into a different
-  -- (ring) carrier.
-  if ← isDefEq R (mkConst ``Nat) then return none
-  let some (rel, a, b) ← natComparison? type | return none
   try
-    let lifted ← match rel with
-      | .le => mkAppOptM ``Lean.Grind.OrderedRing.natCast_le_natCast_of_le
-                 (#[some R] ++ Array.replicate 6 none ++ #[some a, some b, some proof])
-      | .lt => mkAppOptM ``Lean.Grind.OrderedRing.natCast_lt_natCast_of_lt
-                 (#[some R] ++ Array.replicate 6 none ++ #[some a, some b, some proof])
-      | .eq =>
-          -- `↑(·)` is a function, so cast congruence lifts the equality: `↑a = ↑b`.
-          let castFn ← mkAppOptM ``Nat.cast #[some R, none]
-          mkAppM ``congrArg #[castFn, proof]
-    return some lifted
+    -- `ℕ` source: lift into any non-`ℕ` carrier via the core monotone-cast lemmas.
+    if let some (rel, a, b) ← comparisonOver? (mkConst ``Nat) type then
+      if ← isDefEq R (mkConst ``Nat) then return none
+      let lifted ← match rel with
+        | .le => mkAppOptM ``Lean.Grind.OrderedRing.natCast_le_natCast_of_le
+                   (#[some R] ++ Array.replicate 6 none ++ #[some a, some b, some proof])
+        | .lt => mkAppOptM ``Lean.Grind.OrderedRing.natCast_lt_natCast_of_lt
+                   (#[some R] ++ Array.replicate 6 none ++ #[some a, some b, some proof])
+        | .eq =>
+            -- `↑(·)` is a function, so cast congruence lifts the equality: `↑a = ↑b`.
+            let castFn ← mkAppOptM ``Nat.cast #[some R, none]
+            mkAppM ``congrArg #[castFn, proof]
+      return some lifted
+    -- `ℤ` source: lift into a strictly-higher (non-`ℤ`) carrier via the `intCast_*` helpers.
+    if let some (rel, a, b) ← comparisonOver? (mkConst ``Int) type then
+      if ← isDefEq R (mkConst ``Int) then return none
+      -- `ℕ` is not a `Ring` (no negation), so a possibly-negative `ℤ` must never lift into a
+      -- `ℕ` goal column. The `intCast_*` synthesis would already fail (and the `try` drop it),
+      -- but guard explicitly so the safety policy doesn't rest on a typeclass-synth failure.
+      if ← isDefEq R (mkConst ``Nat) then return none
+      let lifted ← match rel with
+        | .le => mkAppOptM ``intCast_le_of_le
+                   (#[some R] ++ Array.replicate 6 none ++ #[some a, some b, some proof])
+        | .lt => mkAppOptM ``intCast_lt_of_lt
+                   (#[some R] ++ Array.replicate 6 none ++ #[some a, some b, some proof])
+        | .eq => mkAppOptM ``intCast_eq_of_eq
+                   (#[some R] ++ Array.replicate 6 none ++ #[some a, some b, some proof])
+      return some lifted
+    return none
   catch _ => return none
 
 partial def collectHypProof (origin : Name) (proof : Expr) :
@@ -555,10 +575,11 @@ partial def collectHypProof (origin : Name) (proof : Expr) :
     | _ => return #[]
   match ← parseAtomic? type with
   | none =>
-      -- `zify`: a `ℕ` comparison under a ring-carrier goal lifts via the monotone cast so
-      -- it constrains the goal's `↑(·)` columns (`linarith`'s `zify`/`push_cast`). The
-      -- lifted `↑a (rel) ↑b` is over the goal carrier, so it parses on the normal path.
-      if let some lifted ← zifyNatHyp? proof type then
+      -- `zify`: a `ℕ`/`ℤ` comparison under a higher ring-carrier goal lifts via the
+      -- monotone cast so it constrains the goal's `↑(·)` columns (`linarith`'s
+      -- `zify`/`push_cast`). The lifted `↑a (rel) ↑b` is over the goal carrier, so it
+      -- parses on the normal path.
+      if let some lifted ← zifyHyp? proof type then
         return ← collectHypProof origin lifted
       return #[]
   | some (.lt, lhsExpr, rhsExpr, lhs, rhs) =>

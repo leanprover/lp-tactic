@@ -7,12 +7,12 @@
   hypothesis over a carrier different from the goal's is skipped. `linarith` lifts such
   facts with `zify`/`push_cast`; this is `lp`'s.
 
-  `zifyNatHyp?` (in `LP/Parse.lean`) lifts a `ℕ` comparison `a ≤ b` / `a < b` / `a = b` to
+  `zifyHyp?` (in `LP/Parse.lean`) lifts a `ℕ` comparison `a ≤ b` / `a < b` / `a = b` to
   the goal carrier `R` via the monotone cast (`Lean.Grind.OrderedRing.natCast_le_natCast_of_le`
   / `natCast_lt_natCast_of_lt`, and cast congruence for `=`), producing a proof of
   `↑a (rel) ↑b : R` that `collectHypProof` then parses on the normal path — so the lifted
   `↑a`, `↑b` land on the SAME LP columns as the goal's casts. The lift is fail-open: it sits
-  in `collectHyps`' per-hypothesis `try`/`catch`, and `zifyNatHyp?` itself catches a failed
+  in `collectHyps`' per-hypothesis `try`/`catch`, and `zifyHyp?` itself catches a failed
   cast-lemma synthesis, so a carrier without the monotone cast simply drops the hypothesis
   rather than failing the call. lp stays sound by construction either way — a mis-lift would
   make the certificate identity fail, never prove a false goal.
@@ -20,7 +20,7 @@
   The behavioral payoff is multi-row (a goal column constrained by a lifted row), so — like
   every multi-row case in this dependency-free suite — it needs a registered LP backend and
   is verified downstream / by the resurvey re-measurement; the repros are in comments. What
-  IS validated here, backend-free: that `zifyNatHyp?` actually constructs a well-typed lifted
+  IS validated here, backend-free: that `zifyHyp?` actually constructs a well-typed lifted
   proof (the risky part — cast-lemma name / instance resolution), exercised directly via
   `run_meta` and pinned by `by exact` signature checks over ℤ and an abstract `Grind` field.
 -/
@@ -35,7 +35,7 @@ open LP.Tactic.LP.Internal
 namespace LPTacticTest.Issue58Casts
 
 /-! ## The monotone-cast lift lemmas resolve for lp's ring carriers (the exact lemmas and
-instances `zifyNatHyp?` applies). -/
+instances `zifyHyp?` applies). -/
 
 example (a b : Nat) (h : a ≤ b) : (a : Int) ≤ (b : Int) :=
   OrderedRing.natCast_le_natCast_of_le a b h
@@ -54,7 +54,7 @@ example (a b : Nat) (h : a < b) := OrderedRing.natCast_lt_natCast_of_lt (R := α
 
 end Field
 
-/-! ## `zifyNatHyp?` actually constructs a well-typed lifted proof over ℤ for each relation
+/-! ## `zifyHyp?` actually constructs a well-typed lifted proof over ℤ for each relation
 (direct, backend-free validation of the lift — the part most prone to a wrong lemma name or
 unresolved instance). A failure here is a compile error. -/
 
@@ -72,7 +72,7 @@ run_meta do
       for (tag, mkTy) in checks do
         let ty ← mkTy a b
         withLocalDeclD `h ty fun h => do
-          let (res, _) ← (zifyNatHyp? h ty).run { carrier, allowAtoms := true }
+          let (res, _) ← (zifyHyp? h ty).run { carrier, allowAtoms := true }
           match res with
           | none => throwError "zify ({tag}) over {carrier}: failed to lift a ℕ hypothesis"
           | some lifted =>
