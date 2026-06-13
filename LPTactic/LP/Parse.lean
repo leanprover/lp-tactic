@@ -382,11 +382,22 @@ def isCarrierExpr (e : Expr) : ParseM Bool := do
 `Dyadic`, `Nat`) are short-circuited (native instances, no synth); any other type is
 accepted iff it carries the ordered-`Field` bundle (`ℝ` etc.). Used by the `∃`/`∀`/
 `maximize` frontends to dispatch on any supported carrier, not just `Rat`. (`isDefEq`,
-not `isConstOf`, so reducible aliases of the core carriers are still recognized.) -/
+not `isConstOf`, so reducible aliases of the core carriers are still recognized.)
+
+The field branch demands `IsCharP α 0`, not just `Lean.Grind.Field α`. The certificate
+engine renders rational coefficients via the `Field.NormNum.ofRat` lemmas (`add_eq`,
+`mul_eq`, `ofRat_add`, …), which carry `[IsCharP α 0]` — numeral faithfulness is false in
+positive characteristic (e.g. `1/2 + 1/2 = 1` fails in `ℤ/2ℤ`). An ordered Grind field
+supplies `IsCharP α 0` for free (core's `OrderedRing → IsCharP` instance), so `ℝ` and any
+abstract ordered field still dispatch here. A bare or non-ordered field — `ℂ`, a
+`NormedField`, the fraction field of a valuation ring — does not, and must fall through
+cleanly: without this gate such a carrier dispatches to the field engine and then leaks a
+raw `failed to synthesize Lean.Grind.IsCharP α 0` from certificate assembly (Issue 59). -/
 def isCarrierType (α : Expr) : MetaM Bool := do
   for c in [``Rat, ``Int, ``Dyadic, ``Nat] do
     if ← isDefEq α (mkConst c) then return true
-  return (← synthInstance? (← mkAppM ``Lean.Grind.Field #[α])).isSome
+  unless (← synthInstance? (← mkAppM ``Lean.Grind.Field #[α])).isSome do return false
+  return (← synthInstance? (← mkAppM ``Lean.Grind.IsCharP #[α, toExpr (0 : Nat)])).isSome
 
 def parseAtomicRat (rel : Rel) (lhs rhs : Expr) :
     ParseM (Option (Rel × Expr × Expr × LinExpr × LinExpr)) := do
