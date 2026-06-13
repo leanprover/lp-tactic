@@ -421,6 +421,7 @@ def parseAtomicRat (rel : Rel) (lhs rhs : Expr) :
   return some (rel, lhs, rhs, ← parseExpr lhs, ← parseExpr rhs)
 
 def parseAtomic? (type : Expr) : ParseM (Option (Rel × Expr × Expr × LinExpr × LinExpr)) := do
+  let type := type.consumeMData  -- strip goal `mdata` before reading the comparison head
   let e := type
   let fn := e.getAppFn
   let args := e.getAppArgs

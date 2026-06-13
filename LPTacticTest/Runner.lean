@@ -17,6 +17,7 @@ import LPTacticTest.Issue43
 import LPTacticTest.Issue45
 import LPTacticTest.Issue46
 import LPTacticTest.Issue47
+import LPTacticTest.Issue55
 import LPTacticTest.Issue57
 import LPTacticTest.Issue59
 import LPTacticTest.Issue60
