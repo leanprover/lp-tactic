@@ -24,6 +24,7 @@ import LPTacticTest.Issue65
 import LPTacticTest.Issue58
 import LPTacticTest.Issue58Casts
 import LPTacticTest.Issue58PushCast
+import LPTacticTest.Issue70Casts
 
 def main : IO UInt32 :=
   LPTacticTest.Registry.main
