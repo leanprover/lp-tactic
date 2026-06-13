@@ -51,19 +51,6 @@ theorem $(Lean.mkIdent `add_congr_eq) (a A b B : $α) (ha : a = A) (hb : b = B) 
 theorem $(Lean.mkIdent `mul_congr_eq_r) (k a A : $α) (e : a = A) : k * a = k * A := by grind
 
 theorem $(Lean.mkIdent `mul_congr_eq_l) (a A k : $α) (e : a = A) : a * k = A * k := by grind
-
-/-! ### Ring-normalization (distributivity / reassociation) lemmas.
-
-The product preprocessing (`distributeMul?`) pushes a `*` of two non-scalar factors
-through the additive structure of its operands and reassociates left-nested products,
-so the linear part becomes visible (`p * (n + 1) ↝ p * n + p`). Each lemma rewrites one
-product node to its distributed/reassociated form; the normalizer recurses on the result. -/
-
-theorem $(Lean.mkIdent `add_mul) (a b c : $α) : (a + b) * c = a * c + b * c := by grind
-
-theorem $(Lean.mkIdent `mul_add) (a b c : $α) : a * (b + c) = a * b + a * c := by grind
-
-theorem $(Lean.mkIdent `mul_reassoc) (a b c : $α) : (a * b) * c = a * (b * c) := by grind
 )
 
 /-- The semiring block plus the ring (neg/sub) normalizer lemmas. -/
@@ -78,16 +65,6 @@ theorem $(Lean.mkIdent `neg_cons) (x c m rest rest' : $α) (hm : -c = m) (e : -r
 theorem $(Lean.mkIdent `neg_congr_eq) (a A : $α) (e : a = A) : -a = -A := by grind
 
 theorem $(Lean.mkIdent `sub_to_add_neg) (a b : $α) : a - b = a + (-b) := by grind
-
-/-- Ring distributivity through subtraction / negation (the additive cases the
-semiring block omits): the product preprocessing reaches these on the ring carriers. -/
-theorem $(Lean.mkIdent `sub_mul) (a b c : $α) : (a - b) * c = a * c - b * c := by grind
-
-theorem $(Lean.mkIdent `mul_sub) (a b c : $α) : a * (b - c) = a * b - a * c := by grind
-
-theorem $(Lean.mkIdent `neg_mul) (a c : $α) : (-a) * c = -(a * c) := by grind
-
-theorem $(Lean.mkIdent `mul_neg) (a c : $α) : a * (-c) = -(a * c) := by grind
 )
 
 /-- Declare the full ordered-comm-ring certificate lemma block for the carrier `α`

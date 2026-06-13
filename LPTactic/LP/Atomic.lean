@@ -374,65 +374,7 @@ def relCarrier? (type : Expr) : Option Expr :=
       if args.size == 3 then some args[0]! else none
   | _ => none
 
-/-- Match an atomic comparison `a op b` (`≤`/`<`/`=`, with `≥`/`>` normalised by swapping
-sides) and return `(rel, α, a, b)`. Used by the ℕ→ℤ cast bridging to spot the `Nat`
-hypotheses worth casting. -/
-def asComparison? (ty : Expr) : Option (Rel × Expr × Expr × Expr) :=
-  let args := ty.getAppArgs
-  match ty.getAppFn with
-  | .const ``LE.le _ => if args.size == 4 then some (.le, args[0]!, args[2]!, args[3]!) else none
-  | .const ``GE.ge _ => if args.size == 4 then some (.le, args[0]!, args[3]!, args[2]!) else none
-  | .const ``LT.lt _ => if args.size == 4 then some (.lt, args[0]!, args[2]!, args[3]!) else none
-  | .const ``GT.gt _ => if args.size == 4 then some (.lt, args[0]!, args[3]!, args[2]!) else none
-  | .const ``Eq _    => if args.size == 3 then some (.eq, args[0]!, args[1]!, args[2]!) else none
-  | _ => none
-
-/-- For a `Nat` comparison `rel` with sides `a b : ℕ`, the Lean-core iff
-`(↑a op ↑b : ℤ) ↔ (a op b)` (`Int.ofNat_le`/`Int.ofNat_lt`/`Int.natCast_inj`), with the
-carrier pinned to `ℤ` and the cast `↑` the canonical `Nat.cast` (so the cast atoms `↑a`,
-`↑b` it produces match those in `ℤ`-cast hypotheses and in `castNonnegRows`). -/
-def natCastIff (rel : Rel) (a b : Expr) : MetaM Expr :=
-  match rel with
-  | .le => mkAppOptM ``Int.ofNat_le #[some a, some b]
-  | .lt => mkAppOptM ``Int.ofNat_lt #[some a, some b]
-  | .eq => mkAppOptM ``Int.natCast_inj #[some a, some b]
-
-/-- linarith's ℕ→ℤ cast preprocessing, as a fallback for a `Nat` atomic goal `lhs op rhs`
-the `Nat` hypotheses alone cannot prove because the bound routes through `ℤ`-cast
-hypotheses (`n + ↑s = ↑m`, …): `lp` collects rows per carrier, so over `ℕ` it never sees
-the `ℤ` facts relating `m` and `d`.
-
-Recast the goal to `(↑lhs op ↑rhs : ℤ)`, and assert each `Nat` comparison hypothesis's `ℤ`
-cast into the context, so the `ℤ` solve sees the `Nat` facts alongside the native `ℤ`-cast
-ones (with `0 ≤ ↑n` supplied per cast atom by `castNonnegRows`). Solve the `ℤ` goal with
-`solve` (`solveAtomic` itself; over the `ℤ` carrier this fallback never re-triggers), then
-map the proof back with the same cast iff. The original goal is assigned only on success, so
-a failed `ℤ` solve leaves the goal untouched for the caller to surface the original error. -/
-def solveNatViaIntCast (g : MVarId) (rel : Rel) (lhs rhs : Expr)
-    (solve : MVarId → TacticM Unit) : TacticM Unit := g.withContext do
-  -- Cast every `Nat` comparison hypothesis to `ℤ` and assert it. Each cast is best-effort:
-  -- a hypothesis whose iff cannot be built is simply skipped (soundness is unaffected — it
-  -- only adds facts), so an odd shape never breaks the bridge.
-  let mut g := g
-  for decl in ← getLCtx do
-    if decl.isImplementationDetail then continue
-    unless ← isProp decl.type do continue
-    let some (hrel, α, a, b) := asComparison? decl.type | continue
-    unless ← isDefEq α (mkConst ``Nat) do continue
-    try
-      let iff ← natCastIff hrel a b
-      let castType := (← inferType iff).getAppArgs[0]!
-      let castProof ← mkAppM ``Iff.mpr #[iff, decl.toExpr]
-      g := (← (← g.assert (← mkFreshUserName `lpCast) castType castProof).intro1P).2
-    catch _ => pure ()
-  g.withContext do
-    let iff ← natCastIff rel lhs rhs
-    let zGoalType := (← inferType iff).getAppArgs[0]!
-    let mz ← mkFreshExprMVar zGoalType
-    solve mz.mvarId!
-    g.assign (← mkAppM ``Iff.mp #[iff, ← instantiateMVars mz])
-
-partial def solveAtomic (g : MVarId) : TacticM Unit := do
+def solveAtomic (g : MVarId) : TacticM Unit := do
   g.withContext do
     let target ← instantiateMVars (← g.getType)
     -- Detect the goal's carrier `α` and parse hypotheses against it (those over
@@ -491,21 +433,8 @@ partial def solveAtomic (g : MVarId) : TacticM Unit := do
     -- residual linear problem closes, that is exactly the cheap sound move `linarith`
     -- makes. When it does NOT close, the goal genuinely needs truncation semantics: surface
     -- the `cutsat`/`omega` hint here, at the point of failure, rather than at parse time.
-    -- linarith's ℕ→ℤ cast bridging: a `Nat` goal whose bound only follows through `ℤ`-cast
-    -- hypotheses isn't provable from the `Nat` rows alone. When the native `Nat` solve fails,
-    -- retry by casting the goal (and the `Nat` hypotheses) into `ℤ`. The retry restores the
-    -- tactic state on failure and re-raises the original error.
-    let solveWithCast : TacticM Unit := do
-      try solve
-      catch e =>
-        if (← detectCarrierKind carrier) == .nat then
-          let s ← saveState
-          try solveNatViaIntCast g rel lhsExpr rhsExpr solveAtomic
-          catch _ => s.restore; throw e
-        else
-          throw e
     if st.truncatingAtoms then
-      try solveWithCast
+      try solve
       catch e =>
         -- Append the hint to whatever the solve failed with (the underlying error is kept
         -- above). Worded so it does not assert a specific failure cause — the atom simply
@@ -515,6 +444,6 @@ partial def solveAtomic (g : MVarId) : TacticM Unit := do
           ""}carries no truncation arithmetic). If the goal genuinely needs truncation {
           ""}semantics, use `cutsat` (or `omega`)."
     else
-      solveWithCast
+      solve
 
 end LP.Tactic.LP.Internal
