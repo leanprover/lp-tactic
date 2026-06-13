@@ -451,6 +451,68 @@ def canonAtom (carrier : Expr) (e : Expr) : MetaM (Option Expr) := do
   if e.hasExprMVar || e.hasLevelMVar || e.hasLooseBVars then return none
   return some ((← mulCanonKey? carrier e).getD e)
 
+/-- Match `e` (already `whnfR`-reduced) as a binary application of `head` (a heterogeneous
+`HAdd`/`HSub`/`HMul` operator constant, all 6 explicit+instance args), returning its two
+operands. -/
+private def asBinop? (head : Name) (e : Expr) : Option (Expr × Expr) :=
+  let args := e.getAppArgs
+  if e.getAppFn.isConstOf head && args.size == 6 then some (args[4]!, args[5]!) else none
+
+/-! ### Product ring-normalization (distributivity / reassociation)
+
+`lp` atomizes a product of two non-scalar factors opaquely, hiding any linear structure
+(`p * (n + 1)` becomes one atom rather than `p*n + p`). `linarith` runs a ring pass first;
+`distributeMul?` is `lp`'s: it pushes a `*` through the additive structure of either
+operand and reassociates left-nested products so scalars surface, leaving genuine
+products-of-atoms (e.g. `p*n`) as the only opaque monomials — which the existing atomizer
+canonicalizes (`mulCanonKey?`) so commuted forms share a column. -/
+
+/-- Decide how to ring-normalize a product `lhs * rhs` whose two factors are BOTH
+non-scalar (the caller has already tried the scalar-`*` paths). Returns the distributed /
+reassociated expression together with the normalizer lemma's base name and explicit
+arguments proving `lhs * rhs = result`, or `none` when neither factor is additive and
+`lhs` is not itself a product — a genuine product-of-atoms monomial, atomized as before.
+
+Shared verbatim by the parser (`parseInto`, which uses only the result `Expr`) and the
+certificate normalizer (`normalizeR`, which also applies the named lemma via `applyLemma`),
+so the two walks distribute identically and agree on every atom column. Determinism is what
+makes the lockstep hold: both call this with the same `lhs`/`rhs` and get the same result.
+
+The result `Expr` reuses `e`'s own `HMul` head for every rebuilt product (so atom keys
+stay consistent with the source term) and synthesizes the `+`/`-`/`neg` heads via `mkAppM`
+(defeq to the monomorphic lemma's operators, which is all the certificate `Eq.trans`
+needs). `allowSub` mirrors `ScalarCaps`: on a carrier without exact subtraction/negation
+(`Nat`) the `-`/`neg` cases never fire (`Nat` has no `Neg`, so they never appear). -/
+def distributeMul? (allowSub : Bool) (e lhs rhs : Expr) :
+    MetaM (Option (Expr × Name × Array Expr)) := do
+  let mulHead := e.appFn!.appFn!
+  let mkMul (a b : Expr) : Expr := mkApp2 mulHead a b
+  let lhs ← withReducible <| whnfR lhs
+  let rhs ← withReducible <| whnfR rhs
+  -- Distribute over `lhs`'s additive structure: `(a ± b) * c`, `(-a) * c`.
+  if let some (a, b) := asBinop? ``HAdd.hAdd lhs then
+    return some (← mkAppM ``HAdd.hAdd #[mkMul a rhs, mkMul b rhs], `add_mul, #[a, b, rhs])
+  if allowSub then
+    if let some (a, b) := asBinop? ``HSub.hSub lhs then
+      return some (← mkAppM ``HSub.hSub #[mkMul a rhs, mkMul b rhs], `sub_mul, #[a, b, rhs])
+    if lhs.isAppOfArity ``Neg.neg 3 then
+      let a := lhs.appArg!
+      return some (← mkAppM ``Neg.neg #[mkMul a rhs], `neg_mul, #[a, rhs])
+  -- `lhs` is a (non-scalar) product: reassociate `(a * b) * c = a * (b * c)` so a scalar
+  -- buried at the head of a left-nested product surfaces for the scalar-`*` path.
+  if let some (a, b) := asBinop? ``HMul.hMul lhs then
+    return some (mkMul a (mkMul b rhs), `mul_reassoc, #[a, b, rhs])
+  -- `lhs` is atomic; distribute over `rhs`'s additive structure: `a * (b ± c)`, `a * (-c)`.
+  if let some (b, c) := asBinop? ``HAdd.hAdd rhs then
+    return some (← mkAppM ``HAdd.hAdd #[mkMul lhs b, mkMul lhs c], `mul_add, #[lhs, b, c])
+  if allowSub then
+    if let some (b, c) := asBinop? ``HSub.hSub rhs then
+      return some (← mkAppM ``HSub.hSub #[mkMul lhs b, mkMul lhs c], `mul_sub, #[lhs, b, c])
+    if rhs.isAppOfArity ``Neg.neg 3 then
+      let c := rhs.appArg!
+      return some (← mkAppM ``Neg.neg #[mkMul lhs c], `mul_neg, #[lhs, c])
+  return none
+
 /-- Look up the LP variable for a canonical atom `a`: first the exact (syntactic) key, then,
 on a miss, an `isDefEq` scan over the registered atoms. The scan lets atoms that are equal up
 to definitional unfolding (`↑n` via different cast paths, `π` behind different reducible

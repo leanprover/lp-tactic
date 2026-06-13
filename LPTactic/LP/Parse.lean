@@ -344,6 +344,14 @@ partial def parseInto (caps : ScalarCaps) (acc : LinAcc) (k : Rat) (e : Expr) :
               return ← parseInto caps acc (k * c) rhs
             if let some c ← parseScalar? caps rhs then
               return ← parseInto caps acc (k * c) lhs
+            -- Neither side is a (compound) closed scalar: ring-normalize the product —
+            -- distribute through the additive structure of either factor and reassociate
+            -- left-nested products (`p * (n + 1) ↝ p*n + p`), then reparse the result so the
+            -- linear part becomes visible. A genuine product-of-atoms (nothing distributes)
+            -- still atomizes opaquely, exactly as before. The certificate normalizer mirrors
+            -- this via the same `distributeMul?`, so the atom columns agree.
+            if let some (dist, _, _) ← distributeMul? caps.allowSub e lhs rhs then
+              return ← parseInto caps acc k dist
             return ← atomIntoOrThrow acc k eOrig "lp: nonlinear multiplication; one side of `*` must be a reducibly-closed scalar"
       | .const ``HDiv.hDiv _ =>
           -- `Int`/`Nat` `/` is floor division — even `x / 2` is NOT the affine `(1/2)•x`,

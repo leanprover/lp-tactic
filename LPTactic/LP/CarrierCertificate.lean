@@ -383,7 +383,17 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
           else if let some (kVal, hKEq) ← m.normalizeScalar? vidx rhsE then
             smulR kVal hKEq
           else
-            m.normalizeAtom e
+            -- Neither side is a (compound) closed scalar: ring-normalize the product,
+            -- mirroring the parser's `distributeMul?` in `parseInto`. Rewrite the product to
+            -- its distributed/reassociated form with the matching monomorphic lemma, then
+            -- recurse on the result. A genuine product-of-atoms (nothing distributes)
+            -- atomizes as before. Determinism of `distributeMul?` keeps this in lockstep
+            -- with the parse, so the rebuilt sub-products resolve to the same atom columns.
+            match ← distributeMul? m.allowSub e lhsE rhsE with
+            | some (dist, lemmaName, lemmaArgs) =>
+                let (L, pInner, rL) ← m.normalizeR vidx dist
+                return (L, m.mkEqTrans e dist rL (m.applyLemma lemmaName lemmaArgs) pInner, rL)
+            | none => m.normalizeAtom e
       | .const ``HDiv.hDiv _ =>
           unless args.size == 6 do return ← m.normalizeAtom e
           -- `Int`/`Nat` floor-division was atomized by the parser (even `x / 2`: it is NOT

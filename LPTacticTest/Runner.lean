@@ -21,6 +21,7 @@ import LPTacticTest.Issue57
 import LPTacticTest.Issue59
 import LPTacticTest.Issue60
 import LPTacticTest.Issue65
+import LPTacticTest.Issue58
 
 def main : IO UInt32 :=
   LPTacticTest.Registry.main
