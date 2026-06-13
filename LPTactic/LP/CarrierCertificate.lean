@@ -239,6 +239,20 @@ where
       return ({ restL with coeffs := #[(v, mVal)] ++ restL.coeffs }, pf,
         m.mkAdd (m.mkMul mE xE) resPrev)
 
+/-- A bare `Expr.fvar` the normalizer may use *directly* as an LP column: a genuine local
+(`cdecl`), NOT a `let`-bound fvar. The parser's `parseInto` runs a per-node `whnfR` that
+zeta-expands a `let`-fvar to its value and atomizes that value (an opaque virtual column);
+so the certificate normalizer must route a `let`-fvar through the general recursion (which
+`whnfR`s and atomizes it identically) rather than shortcutting it into a raw-fvar column.
+Otherwise the *same* `let` variable is columned raw at one occurrence (e.g. the `R` in a
+goal `R / 4`, reached via the `smulL` `isFVar` fast path) and as an atomized value at
+another (the bare `R` in a hypothesis `0 < R`, reached via the general path), and the two
+columns never cancel — the `surviving atom(s)` / `identity sides disagree` failures. -/
+def rawColumnFVarId? (e : Expr) : MetaM (Option FVarId) := do
+  let .fvar id := e | return none
+  if (← id.getDecl).isLet then return none
+  return some id
+
 mutual
 
 /-- Structural normalizer: `(L, pf : e = ⟦L⟧, ⟦L⟧)`. -/
@@ -316,8 +330,8 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
       | .const ``Neg.neg _ =>
           unless args.size == 3 do return ← m.normalizeAtom e
           let aE := args[2]!
-          if aE.isFVar then
-            let L : LinExpr := {coeffs := #[(aE.fvarId!, -1)]}
+          if let some aId ← rawColumnFVarId? aE then
+            let L : LinExpr := {coeffs := #[(aId, -1)]}
             return (L, m.applyLemma `neg_atom_norm #[aE], m.render L)
           let (La, pa, rA) ← m.normalizeR vidx aE
           let (L, pn, rL) ← m.proveNeg La
@@ -329,8 +343,9 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
           -- Scalar on the left; `hKEq : lhsE = ⟦kVal⟧`.
           let smulL (kVal : Rat) (hKEq : Expr) : MetaM (LinExpr × Expr × Expr) := do
             let coefE := m.mkLit kVal
-            if kVal != 0 && rhsE.isFVar then
-              let L : LinExpr := {coeffs := #[(rhsE.fvarId!, kVal)]}
+            if kVal != 0 then
+             if let some rId ← rawColumnFVarId? rhsE then
+              let L : LinExpr := {coeffs := #[(rId, kVal)]}
               let step1 := m.applyLemma `mul_congr_eq_l #[lhsE, coefE, rhsE, hKEq]
               let rL := m.render L
               let step2 := m.applyLemma `mul_atom_norm #[coefE, rhsE]
