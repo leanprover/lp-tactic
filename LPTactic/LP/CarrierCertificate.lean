@@ -423,7 +423,15 @@ partial def normalizeR (m : CarrierMethods) (vidx : VarIdx) (e : Expr) :
             let pCongr := m.applyLemma `div_congr_eq_r #[dividend, divisor, cE, hCEq]
             return (L, m.mkEqTrans e eLit rL pCongr pInner, rL)
           m.normalizeAtom e
-      | _ => m.normalizeAtom e
+      | _ =>
+          -- Cast normalization (`push_cast`), mirroring the parser's `pushCast?` in
+          -- `parseInto`: rewrite a cast of `ℕ`/`ℤ` arithmetic to its pushed form (proof from
+          -- the `Grind` cast lemma) and recurse. An opaque cast leaf atomizes as before.
+          match ← pushCast? e with
+          | some (pushed, proof) =>
+              let (L, pInner, rL) ← m.normalizeR vidx pushed
+              return (L, m.mkEqTrans e pushed rL proof pInner, rL)
+          | none => m.normalizeAtom e
 
 /-- Bridge a compound closed scalar that `scalarLit?` deliberately rejects
 (`quickScalarLit?` does not descend into `HAdd`/`HSub`, so `(2 - 1)` is not a quick

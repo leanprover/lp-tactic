@@ -513,6 +513,70 @@ def distributeMul? (allowSub : Bool) (e lhs rhs : Expr) :
       return some (← mkAppM ``Neg.neg #[mkMul lhs c], `mul_neg, #[lhs, c])
   return none
 
+/-! ### Cast normalization (`push_cast`)
+
+A cast `↑(a + b)` / `↑(a * b)` over `ℕ`/`ℤ` is one opaque atom for `lp`, so its linear
+structure — and any match against the goal's separately-cast columns — is invisible.
+`pushCast?` pushes the cast one step inward (`linarith`'s `push_cast`), using the `Grind`
+ring cast lemmas; the recursion (in the parser / normalizer) then keeps pushing until each
+cast wraps an opaque leaf (`↑(#A)`), which atomizes as before. A pushed product feeds the
+stage-1 `distributeMul?`; a pushed `ℤ`-cast-of-`ℕ`-cast collapses (`↑↑n = ↑n`). -/
+
+/-- Push a cast node `↑inner` (`@Nat.cast`/`@Int.cast` or their `NatCast`/`IntCast`
+unfoldings, over the goal carrier) one step inward: `↑(a + b) → ↑a + ↑b`, `↑(a * b) → ↑a *
+↑b`, and additionally for `ℤ` casts `↑(a - b) → ↑a - ↑b`, `↑(-a) → -↑a`, `↑↑n → ↑n`.
+Returns `(pushed, proof : ↑inner = pushed)` from the `Grind` cast lemma, or `none` when
+`inner` is an opaque leaf (so the cast atomizes) or the carrier's cast instance does not
+line up with the lemma's (the proof is `isDefEq`-checked, so a mismatch fails closed to
+atomization, keeping the parser and normalizer in lockstep). `ℕ`-source casts never push a
+`-`/`neg` (truncating, no lemma). -/
+def pushCast? (e : Expr) : MetaM (Option (Expr × Expr)) := do
+  let fn := e.getAppFn
+  let args := e.getAppArgs
+  unless args.size == 3 do return none
+  let isNat := fn.isConstOf ``Nat.cast || fn.isConstOf ``NatCast.natCast
+  let isInt := fn.isConstOf ``Int.cast || fn.isConstOf ``IntCast.intCast
+  unless isNat || isInt do return none
+  let α := args[0]!
+  let castHead := e.appFn!               -- `@Nat.cast α inst` / `@Int.cast α inst`
+  let mkCast (x : Expr) : Expr := mkApp castHead x
+  let inner ← withReducible <| whnfR args[2]!
+  -- Build the lemma proof `↑inner = pushed`, accept iff it actually proves that (defeq
+  -- check absorbs any cast-instance diamond); else fall back to atomizing.
+  let accept (lemmaName : Name) (lemArgs : Array Expr) (pushed : Expr) :
+      MetaM (Option (Expr × Expr)) := do
+    try
+      let proof ← mkAppOptM lemmaName (#[some α, none] ++ lemArgs.map some)
+      let want ← mkEq e pushed
+      if ← isDefEq (← inferType proof) want then
+        return some (pushed, ← mkExpectedTypeHint proof want)
+      else return none
+    catch _ => return none
+  let semi (n : Name) := (`Lean.Grind.Semiring).append n
+  let ring (n : Name) := (`Lean.Grind.Ring).append n
+  if isNat then
+    if let some (a, b) := asBinop? ``HAdd.hAdd inner then
+      return ← accept (semi `natCast_add) #[a, b] (← mkAppM ``HAdd.hAdd #[mkCast a, mkCast b])
+    if let some (a, b) := asBinop? ``HMul.hMul inner then
+      return ← accept (semi `natCast_mul) #[a, b] (← mkAppM ``HMul.hMul #[mkCast a, mkCast b])
+    return none
+  else
+    if let some (a, b) := asBinop? ``HAdd.hAdd inner then
+      return ← accept (ring `intCast_add) #[a, b] (← mkAppM ``HAdd.hAdd #[mkCast a, mkCast b])
+    if let some (a, b) := asBinop? ``HSub.hSub inner then
+      return ← accept (ring `intCast_sub) #[a, b] (← mkAppM ``HSub.hSub #[mkCast a, mkCast b])
+    if let some (a, b) := asBinop? ``HMul.hMul inner then
+      return ← accept (ring `intCast_mul) #[a, b] (← mkAppM ``HMul.hMul #[mkCast a, mkCast b])
+    if inner.isAppOfArity ``Neg.neg 3 then
+      let a := inner.appArg!
+      return ← accept (ring `intCast_neg) #[a] (← mkAppM ``Neg.neg #[mkCast a])
+    -- `↑↑n` (an `Int` cast of a `ℕ` cast) collapses to `↑n` over the carrier.
+    if inner.isAppOfArity ``Nat.cast 3 || inner.isAppOfArity ``NatCast.natCast 3 then
+      let n := inner.appArg!
+      let natCastN ← mkAppOptM ``Nat.cast #[some α, none, some n]
+      return ← accept (ring `intCast_natCast) #[n] natCastN
+    return none
+
 /-- Look up the LP variable for a canonical atom `a`: first the exact (syntactic) key, then,
 on a miss, an `isDefEq` scan over the registered atoms. The scan lets atoms that are equal up
 to definitional unfolding (`↑n` via different cast paths, `π` behind different reducible

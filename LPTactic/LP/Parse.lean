@@ -373,6 +373,12 @@ partial def parseInto (caps : ScalarCaps) (acc : LinAcc) (k : Rat) (e : Expr) :
           if args.size == 6 && !caps.allowDiv then
             return ← atomTruncatingInto acc k eOrig (divTruncMsg caps.carrier)
       | _ => pure ()
+      -- Cast normalization (`push_cast`): a cast of `ℕ`/`ℤ` arithmetic pushes inward so the
+      -- linear structure (and any match against the goal's separately-cast columns) becomes
+      -- visible; the pushed form reparses. An opaque cast leaf (`↑(#A)`) still atomizes. The
+      -- normalizer mirrors this via the same `pushCast?`, so the atom columns agree.
+      if let some (pushed, _) ← pushCast? e then
+        return ← parseInto caps acc k pushed
       let carrier := (← get).carrier
       atomIntoOrThrow acc k eOrig m!"lp: unsupported {carrier} expression{indentExpr e}"
 
