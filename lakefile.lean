@@ -35,7 +35,8 @@ lean_lib LPTacticTest where
              `LPTacticTest.Issue38, `LPTacticTest.Issue40, `LPTacticTest.Issue41,
              `LPTacticTest.Issue42, `LPTacticTest.Issue43, `LPTacticTest.Issue45,
              `LPTacticTest.Issue46, `LPTacticTest.Issue47, `LPTacticTest.Issue57,
-             `LPTacticTest.Issue59, `LPTacticTest.Issue60]
+             `LPTacticTest.Issue59, `LPTacticTest.Issue60,
+             `LPTacticTest.Issue65]
 
 lean_exe «registry-tests» where
   root := `LPTacticTest.Registry
