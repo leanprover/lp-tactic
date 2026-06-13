@@ -14,16 +14,19 @@
   from the cast lemma and is `isDefEq`-checked against `↑inner = pushed`, so a cast whose
   instance does not line up with the lemma's fails closed to atomization (no unsoundness, no
   divergence between the two walks). A pushed product feeds the stage-1 distribution; a cast
-  of a numeral folds through the existing scalar path (`↑(2 : ℕ)` is the scalar `2`).
+  of a closed numeral folds to the carrier numeral (`↑(2 : ℕ) → (2 : α)`) — see
+  `Issue69.lean`.
 
   These are ring IDENTITIES over `ℤ` (the `.int` engine) and `ℚ` (the `.rat` engine): both
   sides `push_cast`-normalize to the same linear form, so the objective residual is closed
   and the goal proves with zero rows — the full parser → normalizer → certificate path that
   `pushCast?` feeds, kernel-checked, no backend.
 
-  Two refinements are left for a follow-up: folding a cast of a numeral (`↑(2 : ℕ) → 2`,
-  which needs the per-carrier `proveLitEq` to bridge a cast literal, so `↑(2 * #A)` collapses
-  to `2 * ↑#A`), and `ℤ`→`R` hypothesis lifting (the `IntCast` Grind/core diamond and a
+  Refinements left for a follow-up: the factor / coefficient-collapse case (`↑(2 * #A)`
+  pushes to `↑2 * ↑#A`, whose surviving `↑2` is reached as a product factor via `parseScalar?`
+  rather than the `pushCast?` hook — folding it there would need the per-carrier `proveLitEq`
+  to bridge a cast literal `↑(2 : ℕ) = ⟦2⟧`; deferred since no resurvey site needs it, see
+  `Issue69.lean`), and `ℤ`→`R` hypothesis lifting (the `IntCast` Grind/core diamond and a
   missing forward monotone lemma). The abstract-field cast path reuses this same
   carrier-generic `pushCast?` and the cast-lemma resolution validated in `Issue58Casts.lean`.
 -/

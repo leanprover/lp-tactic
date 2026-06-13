@@ -554,11 +554,44 @@ def pushCast? (e : Expr) : MetaM (Option (Expr × Expr)) := do
     catch _ => return none
   let semi (n : Name) := (`Lean.Grind.Semiring).append n
   let ring (n : Name) := (`Lean.Grind.Ring).append n
+  -- Fold a cast of a closed numeral to the carrier numeral: `↑(n : ℕ/ℤ) → (n : α)` (e.g.
+  -- `↑(2 : ℕ) → (2 : α)`). The pushed form is read straight off the `Grind` lemma's RHS, so
+  -- it carries the lemma's own `OfNat` instance rather than a separately-synthesized one, and
+  -- the `Eq` is `isDefEq`-checked against `↑inner = …` — failing closed to atomization exactly
+  -- like the structural cases. The fold turns `↑(2:ℕ) = 2` into `(2:α) = 2` (a carrier numeral
+  -- both walks already recognize as a scalar), sidestepping the per-carrier literal bridge.
+  let numeralOf? (x : Expr) : Option Nat :=
+    match x with
+    | .lit (.natVal n) => some n
+    | _ =>
+      if x.isAppOfArity ``OfNat.ofNat 3 then
+        match x.getAppArgs[1]! with
+        | .lit (.natVal n) => some n
+        | _ => none
+      -- A reduced `ℤ` numeral can surface as `Int.ofNat n` (the `instOfNatInt` unfolding, the
+      -- same native form `parseScalar?` recognizes), so fold it regardless of `whnfR`'s shape.
+      else if x.isAppOfArity ``Int.ofNat 1 then
+        match x.appArg! with
+        | .lit (.natVal n) => some n
+        | _ => none
+      else none
+  let acceptNumeral (lemmaName : Name) (n : Nat) : MetaM (Option (Expr × Expr)) := do
+    try
+      let proof ← mkAppOptM lemmaName #[some α, none, some (mkRawNatLit n)]
+      let ty ← inferType proof
+      let some (_, _, pushed) := ty.eq? | return none
+      let want ← mkEq e pushed
+      if ← isDefEq ty want then
+        return some (pushed, ← mkExpectedTypeHint proof want)
+      else return none
+    catch _ => return none
   if isNat then
     if let some (a, b) := asBinop? ``HAdd.hAdd inner then
       return ← accept (semi `natCast_add) #[a, b] (← mkAppM ``HAdd.hAdd #[mkCast a, mkCast b])
     if let some (a, b) := asBinop? ``HMul.hMul inner then
       return ← accept (semi `natCast_mul) #[a, b] (← mkAppM ``HMul.hMul #[mkCast a, mkCast b])
+    if let some n := numeralOf? inner then
+      return ← acceptNumeral (semi `natCast_eq_ofNat) n
     return none
   else
     if let some (a, b) := asBinop? ``HAdd.hAdd inner then
@@ -575,6 +608,8 @@ def pushCast? (e : Expr) : MetaM (Option (Expr × Expr)) := do
       let n := inner.appArg!
       let natCastN ← mkAppOptM ``Nat.cast #[some α, none, some n]
       return ← accept (ring `intCast_natCast) #[n] natCastN
+    if let some n := numeralOf? inner then
+      return ← acceptNumeral (ring `intCast_ofNat) n
     return none
 
 /-- Look up the LP variable for a canonical atom `a`: first the exact (syntactic) key, then,
