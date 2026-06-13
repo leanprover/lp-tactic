@@ -11,7 +11,6 @@ import LPTacticTest.Issue34
 import LPTacticTest.Issue35
 import LPTacticTest.Issue38
 import LPTacticTest.Issue40
-import LPTacticTest.Issue41
 import LPTacticTest.Issue42
 import LPTacticTest.Issue43
 import LPTacticTest.Issue45
@@ -20,13 +19,6 @@ import LPTacticTest.Issue47
 import LPTacticTest.Issue55
 import LPTacticTest.Issue57
 import LPTacticTest.Issue59
-import LPTacticTest.Issue60
-import LPTacticTest.Issue65
-import LPTacticTest.Issue58
-import LPTacticTest.Issue58Casts
-import LPTacticTest.Issue58PushCast
-import LPTacticTest.Issue70Casts
-import LPTacticTest.Issue69
 
 def main : IO UInt32 :=
   LPTacticTest.Registry.main

@@ -1,6 +1,5 @@
 module
 public meta import LPTactic.LP.Types
-public import LPTactic.LP.CastLift
 public import LPTactic.LP.FieldGeneric
 public import LPTactic.LP.IntGeneric
 public import LPTactic.LP.DyadicGeneric
@@ -229,7 +228,7 @@ the stored `Expr` (never `Expr.fvar` of a virtual). -/
 def atomVar (e : Expr) : ParseM (Option FVarId) := do
   unless (← get).allowAtoms do return none
   unless ← isDefEq (← inferType e) (← get).carrier do return none
-  let some a ← canonAtom (← get).carrier e | return none
+  let some a ← canonAtom e | return none
   if let some fv ← findDefEqAtom (← get).atomToFVar a then return some fv
   let fv ← mkFreshFVarId
   modify fun s => { s with
@@ -345,14 +344,6 @@ partial def parseInto (caps : ScalarCaps) (acc : LinAcc) (k : Rat) (e : Expr) :
               return ← parseInto caps acc (k * c) rhs
             if let some c ← parseScalar? caps rhs then
               return ← parseInto caps acc (k * c) lhs
-            -- Neither side is a (compound) closed scalar: ring-normalize the product —
-            -- distribute through the additive structure of either factor and reassociate
-            -- left-nested products (`p * (n + 1) ↝ p*n + p`), then reparse the result so the
-            -- linear part becomes visible. A genuine product-of-atoms (nothing distributes)
-            -- still atomizes opaquely, exactly as before. The certificate normalizer mirrors
-            -- this via the same `distributeMul?`, so the atom columns agree.
-            if let some (dist, _, _) ← distributeMul? caps.allowSub e lhs rhs then
-              return ← parseInto caps acc k dist
             return ← atomIntoOrThrow acc k eOrig "lp: nonlinear multiplication; one side of `*` must be a reducibly-closed scalar"
       | .const ``HDiv.hDiv _ =>
           -- `Int`/`Nat` `/` is floor division — even `x / 2` is NOT the affine `(1/2)•x`,
@@ -374,12 +365,6 @@ partial def parseInto (caps : ScalarCaps) (acc : LinAcc) (k : Rat) (e : Expr) :
           if args.size == 6 && !caps.allowDiv then
             return ← atomTruncatingInto acc k eOrig (divTruncMsg caps.carrier)
       | _ => pure ()
-      -- Cast normalization (`push_cast`): a cast of `ℕ`/`ℤ` arithmetic pushes inward so the
-      -- linear structure (and any match against the goal's separately-cast columns) becomes
-      -- visible; the pushed form reparses. An opaque cast leaf (`↑(#A)`) still atomizes. The
-      -- normalizer mirrors this via the same `pushCast?`, so the atom columns agree.
-      if let some (pushed, _) ← pushCast? e then
-        return ← parseInto caps acc k pushed
       let carrier := (← get).carrier
       atomIntoOrThrow acc k eOrig m!"lp: unsupported {carrier} expression{indentExpr e}"
 
@@ -493,66 +478,6 @@ def addOne (e : Expr) : ParseM Expr := do
   let one ← mkAppOptM ``OfNat.ofNat #[some (← get).carrier, some (mkRawNatLit 1), none]
   mkAppM ``HAdd.hAdd #[e, one]
 
-/-- Recognise `type` as a comparison `a ≤ b` / `a < b` / `a = b` over the source carrier
-`src` (descending through `≥`/`>` by flipping), returning `(rel, a, b)` with `a b : src`.
-Used by the `zify` lift to spot a `ℕ`/`ℤ` hypothesis sitting under a higher ring-carrier
-goal. -/
-def comparisonOver? (src type : Expr) : MetaM (Option (Rel × Expr × Expr)) := do
-  let args := type.getAppArgs
-  match type.getAppFn with
-  | .const ``LE.le _ => if args.size == 4 && (← isDefEq args[0]! src) then return some (.le, args[2]!, args[3]!)
-  | .const ``GE.ge _ => if args.size == 4 && (← isDefEq args[0]! src) then return some (.le, args[3]!, args[2]!)
-  | .const ``LT.lt _ => if args.size == 4 && (← isDefEq args[0]! src) then return some (.lt, args[2]!, args[3]!)
-  | .const ``GT.gt _ => if args.size == 4 && (← isDefEq args[0]! src) then return some (.lt, args[3]!, args[2]!)
-  | .const ``Eq _ => if args.size == 3 && (← isDefEq args[0]! src) then return some (.eq, args[1]!, args[2]!)
-  | _ => pure ()
-  return none
-
-/-- `zify` for a `ℕ` or `ℤ` hypothesis under a strictly-higher ring-carrier goal: lift
-`a ≤ b` / `a < b` / `a = b` over the source carrier to the goal carrier `R` via the
-monotone cast (`linarith`'s `zify`/`push_cast` preprocessing), returning a proof of
-`↑a (rel) ↑b : R` so the hypothesis constrains the goal's `↑(·)` columns. Dispatches on the
-source carrier: `ℕ` via the core `OrderedRing.natCast_*` lemmas (and `Nat.cast` congruence
-for `=`), `ℤ` via the `intCast_*` helpers (`LP/CastLift.lean`). Returns `none` when the
-hypothesis is not a `ℕ`/`ℤ` comparison, or its source carrier already equals the goal
-carrier (no lift). Throws (caught here by the local `try`, or upstream by `collectHyps`'
-fail-open wrapper) when `R` lacks the source's monotone cast structure — so e.g. an `ℤ`
-hypothesis under a `ℕ` goal drops (no `Ring` negation, hence no possibly-negative `ℤ`
-sneaking into `ℕ`) rather than failing the call. -/
-def zifyHyp? (proof type : Expr) : ParseM (Option Expr) := do
-  let R := (← get).carrier
-  try
-    -- `ℕ` source: lift into any non-`ℕ` carrier via the core monotone-cast lemmas.
-    if let some (rel, a, b) ← comparisonOver? (mkConst ``Nat) type then
-      if ← isDefEq R (mkConst ``Nat) then return none
-      let lifted ← match rel with
-        | .le => mkAppOptM ``Lean.Grind.OrderedRing.natCast_le_natCast_of_le
-                   (#[some R] ++ Array.replicate 6 none ++ #[some a, some b, some proof])
-        | .lt => mkAppOptM ``Lean.Grind.OrderedRing.natCast_lt_natCast_of_lt
-                   (#[some R] ++ Array.replicate 6 none ++ #[some a, some b, some proof])
-        | .eq =>
-            -- `↑(·)` is a function, so cast congruence lifts the equality: `↑a = ↑b`.
-            let castFn ← mkAppOptM ``Nat.cast #[some R, none]
-            mkAppM ``congrArg #[castFn, proof]
-      return some lifted
-    -- `ℤ` source: lift into a strictly-higher (non-`ℤ`) carrier via the `intCast_*` helpers.
-    if let some (rel, a, b) ← comparisonOver? (mkConst ``Int) type then
-      if ← isDefEq R (mkConst ``Int) then return none
-      -- `ℕ` is not a `Ring` (no negation), so a possibly-negative `ℤ` must never lift into a
-      -- `ℕ` goal column. The `intCast_*` synthesis would already fail (and the `try` drop it),
-      -- but guard explicitly so the safety policy doesn't rest on a typeclass-synth failure.
-      if ← isDefEq R (mkConst ``Nat) then return none
-      let lifted ← match rel with
-        | .le => mkAppOptM ``intCast_le_of_le
-                   (#[some R] ++ Array.replicate 6 none ++ #[some a, some b, some proof])
-        | .lt => mkAppOptM ``intCast_lt_of_lt
-                   (#[some R] ++ Array.replicate 6 none ++ #[some a, some b, some proof])
-        | .eq => mkAppOptM ``intCast_eq_of_eq
-                   (#[some R] ++ Array.replicate 6 none ++ #[some a, some b, some proof])
-      return some lifted
-    return none
-  catch _ => return none
-
 partial def collectHypProof (origin : Name) (proof : Expr) :
     ParseM (Array Row) := do
   let type ← inferType proof
@@ -575,14 +500,7 @@ partial def collectHypProof (origin : Name) (proof : Expr) :
         return ← collectHypProof origin (← mkAppM ``Lean.Grind.Order.le_of_not_lt #[proof])
     | _ => return #[]
   match ← parseAtomic? type with
-  | none =>
-      -- `zify`: a `ℕ`/`ℤ` comparison under a higher ring-carrier goal lifts via the
-      -- monotone cast so it constrains the goal's `↑(·)` columns (`linarith`'s
-      -- `zify`/`push_cast`). The lifted `↑a (rel) ↑b` is over the goal carrier, so it
-      -- parses on the normal path.
-      if let some lifted ← zifyHyp? proof type then
-        return ← collectHypProof origin lifted
-      return #[]
+  | none => return #[]
   | some (.lt, lhsExpr, rhsExpr, lhs, rhs) =>
       match ← intCarrierIsInt? with
       | some isInt =>
