@@ -435,14 +435,16 @@ def solveAtomic (g : MVarId) : TacticM Unit := do
     -- the `cutsat`/`omega` hint here, at the point of failure, rather than at parse time.
     if st.truncatingAtoms then
       try solve
-      catch e =>
-        -- Append the hint to whatever the solve failed with (the underlying error is kept
-        -- above). Worded so it does not assert a specific failure cause — the atom simply
-        -- carries no truncation arithmetic, so a goal that needs it cannot close this way.
-        throwError "{e.toMessageData}\n\nlp: this goal contains a truncating `Nat`-subtraction {
-          ""}or `Int`/`Nat` floor-division/`%`, which `lp` treated as an opaque atom (it {
-          ""}carries no truncation arithmetic). If the goal genuinely needs truncation {
-          ""}semantics, use `cutsat` (or `omega`)."
+      catch _ =>
+        -- The residual LP did not close, and the goal or hypotheses involve a truncating
+        -- `Nat`-subtraction or `Int`/`Nat` floor-division/`%` that `lp` atomized as an opaque
+        -- term (it carries no truncation arithmetic). Surface a clean, self-contained hint
+        -- rather than the raw LP-failure internals (`objective is unbounded …`), which are
+        -- noise here — the atom, not the linear solver, is why the goal cannot close.
+        throwError "lp: this goal involves a truncating `Nat`-subtraction or `Int`/`Nat` {
+          ""}floor-division/`%`, which `lp` atomized as an opaque term (it carries no {
+          ""}truncation arithmetic) and could not close. Use `cutsat` (or `omega`) for {
+          ""}goals that genuinely need truncation semantics."
     else
       solve
 
